@@ -1,0 +1,2 @@
+description = "Post a workflow-status payload to a Slack channel as Block Kit"
+run = "../post-message.sh"

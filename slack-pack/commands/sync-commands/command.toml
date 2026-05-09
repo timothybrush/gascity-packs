@@ -1,0 +1,2 @@
+description = "Reconcile the locally-imported Slack app's slash commands with what's live in Slack"
+run = "../sync-commands.sh"

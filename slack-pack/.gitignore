@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+.gc/
+
+# Built adapter binary — produced by `go build` in adapter/ and read
+# in place by the [[service]] proxy_process command.
+adapter/gc-slack-adapter
+
+# Built operator CLI binary — produced by `go build` in cli/ and exec'd
+# by the commands/<cmd>.sh wrappers via $GC_PACK_DIR/cli/gc-slack-cli.
+cli/gc-slack-cli

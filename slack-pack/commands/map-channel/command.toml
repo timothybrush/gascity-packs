@@ -1,0 +1,2 @@
+description = "Bind a Slack channel to a gc session for slash-command routing"
+run = "../map-channel.sh"

@@ -1,0 +1,2 @@
+description = "Enable Slack-launcher mode on a channel — `@@<handle>` posts spawn new sessions"
+run = "../enable-room-launch.sh"

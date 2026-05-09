@@ -1,0 +1,49 @@
+# Slack pack — Slack provider extension for Gas City.
+#
+# Pack-shipped binaries:
+#
+# - Adapter (./adapter/gc-slack-adapter, built from adapter/main.go).
+#   Public-facing Slack webhook receiver + outbound publisher. The
+#   [[service]] block below has gc supervise it as a proxy_process.
+#
+# - Operator CLI (./cli/gc-slack-cli, built from cli/main.go +
+#   cli/cmd/). Backs the `gc slack <cmd>` verb surface (import-app,
+#   map-channel, map-rig, sync-commands, enable-room-launch,
+#   post-message). The pack's commands/<cmd>.sh wrappers exec that
+#   binary at $GC_PACK_DIR/cli/gc-slack-cli.
+#
+# Both binaries are independent Go modules so they can travel intact
+# alongside the pack. Build flow lives in CONTRIBUTING.md; the
+# README explains the user-visible verb surface.
+
+[pack]
+name = "slack"
+version = "0.0.1"
+schema = 2
+
+# proxy_process service: gc supervises the slack adapter as part of
+# the city's service set. The adapter binds a Unix domain socket at
+# $GC_SERVICE_SOCKET for /publish + /healthz and gc reverse-proxies
+# /svc/slack/* to it. The adapter ALSO binds public TCP :8775 for
+# /slack/events (Tailscale Funnel terminates there); proxy_process
+# accepts that — the controller only owns the UDS lifecycle.
+#
+# Secrets (SLACK_BOT_TOKEN, SLACK_SIGNING_SECRET, SLACK_WORKSPACE_ID)
+# stay in ~/.config/gc-slack-adapter/env and are inherited via
+# os.Environ() at start time. See README.md "Secrets".
+#
+# [[service]] block re-enabled 2026-05-03 afternoon: gc-cdf shipped
+# the URL-prefix fix so GC_SERVICE_URL_PREFIX now resolves to
+# /v0/city/<cityName>/svc/<name>, which matches the supervisor's
+# router. Phase A cutover from legacy nohup → proxy_process.
+
+[[service]]
+name = "slack"
+kind = "proxy_process"
+
+[service.publication]
+visibility = "private"
+
+[service.process]
+command = ["./adapter/gc-slack-adapter"]
+health_path = "/healthz"

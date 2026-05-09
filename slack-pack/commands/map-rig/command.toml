@@ -1,0 +1,2 @@
+description = "Bind a Slack rig to a set of channels for slash-command default routing"
+run = "../map-rig.sh"
