@@ -216,3 +216,112 @@ def test_publish_requires_a_body() -> None:
     with pytest.raises(SystemExit) as exc:
         pub.main(["--session", "gc-1"])
     assert "--body" in str(exc.value)
+
+
+def test_publish_exits_nonzero_when_adapter_receipt_delivered_false(
+        monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture) -> None:
+    """HTTP-200 with delivered=false must NOT be reported as success.
+
+    Mirrors the latent defect tracked by gpk-5sk: PL stamps
+    loop_close_posted_at on the bead based on the CLI's exit code. Any
+    slack rejection (auth, channel renamed, scope change) that returns
+    a 200 with delivered=false must surface as a non-zero exit so the
+    upstream loop doesn't mark a lost post as delivered.
+    """
+    pub, common = _import_modules()
+
+    def fake_request(method, url, body=None, *, csrf=True, timeout=30.0):
+        return {"delivered": False, "failure_kind": "auth"}
+
+    monkeypatch.setattr(common, "_request", fake_request)
+    monkeypatch.setattr(common, "look_up_binding", lambda _sid: _binding_room())
+
+    rc = pub.main([
+        "--session", "gc-82783",
+        "--body", "rejected",
+        "--via", "adapter",
+    ])
+    assert rc == 1
+    err = capsys.readouterr().err
+    # Stderr must be parseable and include the failing reason.
+    assert "delivered=false" in err
+    assert "failure_kind=auth" in err
+
+
+def test_publish_exits_nonzero_when_gc_receipt_delivered_false(
+        monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture) -> None:
+    """gc-routed publishes wrap the receipt under "Receipt"; same gate."""
+    pub, common = _import_modules()
+
+    def fake_request(method, url, body=None, *, csrf=True, timeout=30.0):
+        return {"Receipt": {"Delivered": False, "FailureKind": "not_found"}}
+
+    monkeypatch.setattr(common, "_request", fake_request)
+    monkeypatch.setattr(common, "look_up_binding", lambda _sid: _binding_room())
+
+    rc = pub.main(["--session", "gc-82783", "--body", "x"])
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert "delivered=false" in err
+    assert "failure_kind=not_found" in err
+
+
+def test_publish_exits_nonzero_when_receipt_schema_unknown(
+        monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture) -> None:
+    """No recognizable delivered key → fail closed (don't mask a silent loss)."""
+    pub, common = _import_modules()
+
+    def fake_request(method, url, body=None, *, csrf=True, timeout=30.0):
+        return {"some_unrelated_field": "value"}
+
+    monkeypatch.setattr(common, "_request", fake_request)
+    monkeypatch.setattr(common, "look_up_binding", lambda _sid: _binding_room())
+
+    rc = pub.main(["--session", "gc-82783", "--body", "x"])
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert "delivered=false" in err
+    assert "schema_mismatch" in err
+
+
+def test_publish_still_exits_zero_on_delivered_true(
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    """Regression check: success path must still return 0."""
+    pub, common = _import_modules()
+
+    def fake_request(method, url, body=None, *, csrf=True, timeout=30.0):
+        return {"delivered": True, "message_id": "1700.005"}
+
+    monkeypatch.setattr(common, "_request", fake_request)
+    monkeypatch.setattr(common, "look_up_binding", lambda _sid: _binding_room())
+
+    rc = pub.main([
+        "--session", "gc-82783",
+        "--body", "ok",
+        "--via", "adapter",
+    ])
+    assert rc == 0
+
+
+def test_interpret_publish_receipt_shapes() -> None:
+    """Helper handles adapter-direct, gc-wrapped capitalized, and lowercase
+    nested shapes, plus fail-closed semantics on unknown shapes."""
+    _, common = _import_modules()
+    assert common.interpret_publish_receipt({"delivered": True}) == (True, "")
+    assert common.interpret_publish_receipt(
+        {"delivered": False, "failure_kind": "auth"}) == (False, "auth")
+    assert common.interpret_publish_receipt(
+        {"Receipt": {"Delivered": True, "MessageID": "x"}}) == (True, "")
+    assert common.interpret_publish_receipt(
+        {"Receipt": {"Delivered": False, "FailureKind": "rate_limited"}}
+    ) == (False, "rate_limited")
+    assert common.interpret_publish_receipt(
+        {"receipt": {"delivered": False, "failure_kind": "permanent"}}
+    ) == (False, "permanent")
+    # Fail-closed on unknown shapes.
+    delivered, kind = common.interpret_publish_receipt({})
+    assert delivered is False
+    assert kind == "schema_mismatch"
+    delivered, kind = common.interpret_publish_receipt("not a dict")
+    assert delivered is False
+    assert kind == "non_dict_response"

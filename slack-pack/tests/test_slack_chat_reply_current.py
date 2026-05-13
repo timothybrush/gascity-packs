@@ -127,3 +127,56 @@ def test_idempotency_and_reply_to_propagate(monkeypatch: pytest.MonkeyPatch) -> 
     ])
     assert captured["body"]["reply_to_message_id"] == "1700000.000100"
     assert captured["body"]["idempotency_key"] == "key-42"
+
+
+def test_reply_current_exits_nonzero_on_adapter_delivered_false(
+        monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture) -> None:
+    """Mirror gpk-5sk's gate for the reply-current CLI on the adapter route.
+
+    Added in response to Copilot review on PR #14 — the prior commit landed
+    the delivered-false gate without a regression test for this CLI.
+    """
+    rc, common = _import_modules()
+
+    def fake_request(method: str, url: str, body: dict[str, Any] | None = None,
+                     *, csrf: bool = True, timeout: float = 30.0) -> dict[str, Any]:
+        return {"delivered": False, "failure_kind": "rate_limited"}
+
+    monkeypatch.setattr(common, "_request", fake_request)
+    monkeypatch.setattr(common, "find_latest_inbound_for_session", lambda _sid: None)
+    monkeypatch.setattr(common, "look_up_binding", lambda _sid: None)
+
+    exit_code = rc.main([
+        "--session", "gc-test-session",
+        "--conversation-id", "D0123ROOM",
+        "--body", "rejected",
+        "--via", "adapter",
+    ])
+    assert exit_code == 1
+    err = capsys.readouterr().err
+    assert "delivered=false" in err
+    assert "failure_kind=rate_limited" in err
+
+
+def test_reply_current_exits_nonzero_on_gc_outbound_delivered_false(
+        monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture) -> None:
+    """Same gate via the default gc /extmsg/outbound route (capitalized shape)."""
+    rc, common = _import_modules()
+
+    def fake_request(method: str, url: str, body: dict[str, Any] | None = None,
+                     *, csrf: bool = True, timeout: float = 30.0) -> dict[str, Any]:
+        return {"Receipt": {"Delivered": False, "FailureKind": "not_found"}}
+
+    monkeypatch.setattr(common, "_request", fake_request)
+    monkeypatch.setattr(common, "find_latest_inbound_for_session", lambda _sid: None)
+    monkeypatch.setattr(common, "look_up_binding", lambda _sid: None)
+
+    exit_code = rc.main([
+        "--session", "gc-test-session",
+        "--conversation-id", "D0123ROOM",
+        "--body", "x",
+    ])
+    assert exit_code == 1
+    err = capsys.readouterr().err
+    assert "delivered=false" in err
+    assert "failure_kind=not_found" in err

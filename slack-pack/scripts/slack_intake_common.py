@@ -219,7 +219,14 @@ def publish_via_gc_outbound(
     reply_to_message_id: str = "",
     idempotency_key: str = "",
 ) -> dict[str, Any]:
-    """Publish through gc so peer fanout + transcript recording fire."""
+    """Publish through gc so peer fanout + transcript recording fire.
+
+    Returns the raw receipt JSON from the adapter. HTTP-200 with
+    `delivered: false` is a real failure (slack auth/channel/rate-limit
+    rejection); callers MUST pass the result through
+    :func:`interpret_publish_receipt` and fail loudly on non-delivery,
+    or stamp loop-close on a silently-lost post.
+    """
     body: dict[str, Any] = {
         "session_id": session_id,
         "conversation": {
@@ -250,7 +257,12 @@ def publish_via_adapter(
     reply_to_message_id: str = "",
     idempotency_key: str = "",
 ) -> dict[str, Any]:
-    """Publish directly to the local adapter (skips gc; peers won't see it)."""
+    """Publish directly to the local adapter (skips gc; peers won't see it).
+
+    Same delivered-field contract as :func:`publish_via_gc_outbound`:
+    callers MUST inspect the receipt via :func:`interpret_publish_receipt`.
+    HTTP-200 alone is insufficient evidence of slack delivery.
+    """
     body: dict[str, Any] = {
         "session_id": session_id,
         "conversation": {
@@ -270,6 +282,46 @@ def publish_via_adapter(
         return _request("POST", adapter_publish_url(), body)
     except GCAPIError as exc:
         raise AdapterError(str(exc)) from exc
+
+
+def interpret_publish_receipt(result: Any) -> tuple[bool, str]:
+    """Inspect a publish-receipt JSON and return (delivered, failure_kind).
+
+    The HTTP layer can succeed (200) while the receipt's `delivered`
+    field is false — slack rejected for auth, channel, rate-limit, etc.
+    Without this inspection, callers stamp loop_close_posted_at based on
+    a 200 alone and the post is silently lost.
+
+    Handles three shapes seen in the wild:
+      - Adapter-direct (lowercase keys, per adapter/main.go publishReceipt
+        JSON tags): {"delivered": bool, "failure_kind": "...", ...}
+      - gc-wrapped, capitalized (Go struct fields without json tags):
+        {"Receipt": {"Delivered": bool, "FailureKind": "...", ...}}
+      - gc-wrapped, lowercase: {"receipt": {"delivered": bool, ...}}
+
+    Fail-closed semantics: if no recognizable `delivered` key is found,
+    returns (False, "schema_mismatch") — better to noisily fail an
+    unknown response than silently mask one.
+    """
+    if not isinstance(result, dict):
+        return False, "non_dict_response"
+    if "delivered" in result:
+        delivered = bool(result.get("delivered"))
+        kind = str(result.get("failure_kind", "")) if not delivered else ""
+        return delivered, kind
+    receipt = result.get("Receipt") if isinstance(result.get("Receipt"), dict) else None
+    if receipt is None:
+        receipt = result.get("receipt") if isinstance(result.get("receipt"), dict) else None
+    if isinstance(receipt, dict):
+        if "Delivered" in receipt:
+            delivered = bool(receipt.get("Delivered"))
+            kind = str(receipt.get("FailureKind", "")) if not delivered else ""
+            return delivered, kind
+        if "delivered" in receipt:
+            delivered = bool(receipt.get("delivered"))
+            kind = str(receipt.get("failure_kind", "")) if not delivered else ""
+            return delivered, kind
+    return False, "schema_mismatch"
 
 
 # --- session resolution ---------------------------------------------------
@@ -595,6 +647,9 @@ def publish_to_channel_via_adapter(
     they have no binding for, after receiving a `Slack address-by-handle`
     system reminder. session_id flows through so the adapter applies the
     matching identity registry override.
+
+    Same delivered-field contract as :func:`publish_via_gc_outbound`:
+    callers MUST inspect the receipt via :func:`interpret_publish_receipt`.
     """
     publish_url = adapter_publish_url()
     body: dict[str, Any] = {

@@ -27,6 +27,7 @@ notes and metadata. Crash-safe: `bd mol current` resumes at the right step.
 |----------|--------|-------------|
 | issue | caller | Upstream GitHub issue number (required) |
 | skip_open_pr | caller | "true" to stop at ship-green/branch-ready; do not actually open the PR (default: "false") |
+| auto_push | caller | "true" to authorize the polecat to push + open PR after the eligibility gate passes. Default "false" → halt at branch-ready (default-deny). See dr-1l9hc4 for the autonomous-pr-ship carve-out. |
 
 ## Failure Modes
 
@@ -34,6 +35,8 @@ notes and metadata. Crash-safe: `bd mol current` resumes at the right step.
 |-----------|--------|
 | pr-start raises critical flag (gate, scope, duplicate PR) | gate-after-pr-start halts; summary_for_human set |
 | ship readiness verdict != READY | gate-after-ship halts; summary_for_human set |
+| auto_push=true but eligibility gate fails any hard check | gate-auto-push-eligibility halts; gc.escalate_to=mayor set; summary_for_human names the failed gate |
+| auto_push=false (default) or gate did not write evidence.gate_passed=true | open-pr soft-halts at branch-ready; summary_for_human notes the default-deny outcome |
 | git push fails with 403 (maintainerCanModify) | open-pr halts; recovery is supersede-via-our-fork (see step description) |
 | gh pr create fails | open-pr halts; raw error captured in evidence and summary_for_human |
 
@@ -63,6 +66,10 @@ required = true
 
 [vars.skip_open_pr]
 description = "Stop at the ship-green / branch-ready state; do NOT actually open the PR. Default false."
+default = "false"
+
+[vars.auto_push]
+description = "Positive signal authorizing polecat push + open-PR after eligibility gate. Default false. Required-positive — absence treated as halt-at-branch-ready regardless of skip_open_pr."
 default = "false"
 
 [[steps]]
@@ -351,9 +358,212 @@ REPORT_PATH=$(bd show "$ROOT_ID" --json | jq -r '.[0].metadata."evidence.artifac
 set) or cleared (step body completes; molecule advances)."""
 
 [[steps]]
+id = "gate-auto-push-eligibility"
+title = "Gate: mechanical eligibility check before push"
+needs = ["gate-after-ship"]
+description = """
+Mechanical eligibility gate per the autonomous-pr-ship design
+(`/home/ds/gas-city/docs/design/autonomous-pr-ship.md`, dr-1l9hc4). This step
+is the carve-out that lets a polecat actually push when — and only when — a
+positive `auto_push=true` signal arrived with the dispatch AND every
+mechanical check below passes.
+
+**No LLM judgment in this step.** Every gate is a count, regex match, or
+shell exit code. The only soft input is the polecat's own `polecat_confidence`
+metadata (treated as a mechanical read; default "medium"). Anything that
+would require judgment routes to mayor via `summary_for_human` and
+`gc.escalate_to=mayor`.
+
+When `auto_push != "true"`, this step is a no-op and the chain falls
+through to `open-pr`, whose top-of-step check soft-halts at branch-ready
+(default-deny). The existing `skip_open_pr=true` path is preserved.
+
+**1. Find the root bead and resolve identifiers:**
+```bash
+ROOT_ID=$(bd mol current --json | jq -r '.molecule_id')
+AUTO_PUSH="{{auto_push}}"
+ISSUE_NUM={{issue}}
+REPO_ROOT=$(git rev-parse --show-toplevel)
+cd "$REPO_ROOT"
+BRANCH=$(git branch --show-current)
+```
+
+**2. Skip when auto_push != "true":**
+
+```bash
+if [ "$AUTO_PUSH" != "true" ]; then
+    echo "[gate-auto-push-eligibility] auto_push=$AUTO_PUSH; skipping gate. open-pr will halt at branch-ready (default-deny)."
+    exit 0
+fi
+```
+
+No evidence is written and `gc.halt_chain` is NOT set — the chain advances
+to `open-pr`, which sees the absence of `evidence.gate_passed=true` and
+takes the soft-halt path.
+
+**3. Hard gates — first failure halts the chain and routes to mayor.**
+
+Helper:
+```bash
+halt_gate() {
+    local gate="$1"
+    local detail="$2"
+    bd update "$ROOT_ID" \\
+      --set-metadata "gc.halt_chain=true" \\
+      --set-metadata "gc.escalate_to=mayor" \\
+      --set-metadata "summary_for_human=Auto-push eligibility halt for issue #${ISSUE_NUM}: ${gate}: ${detail}. Branch ${BRANCH} ready at $(git rev-parse HEAD) for human review. Escalating to mayor for routing decision."
+    bd close "$ROOT_ID" --reason "auto-push gate halt: ${gate}"
+    exit 0
+}
+```
+
+  a. **kill-switch** (checked first so the gate fails fast when disarmed):
+  ```bash
+  if [ ! -e /home/ds/.gc/auto-push-armed.flag ]; then
+      bd update "$ROOT_ID" \\
+        --set-metadata "evidence.review_required=true" \\
+        --set-metadata "gc.halt_chain=true" \\
+        --set-metadata "gc.escalate_to=mayor" \\
+        --set-metadata "summary_for_human=Auto-push kill-switch /home/ds/.gc/auto-push-armed.flag is absent. Halting at branch-ready for issue #${ISSUE_NUM}. Mayor must arm the flag before any auto-push proceeds."
+      bd close "$ROOT_ID" --reason "auto-push gate halt: kill-switch absent"
+      exit 0
+  fi
+  ```
+
+  b. **diff-size** — `git diff origin/main...HEAD --numstat` added+removed ≤ 500:
+  ```bash
+  DIFF_LOC=$(git diff origin/main...HEAD --numstat | awk '{a+=$1; r+=$2} END {print (a+r)+0}')
+  if [ "${DIFF_LOC:-0}" -gt 500 ]; then
+      halt_gate "diff-size" "${DIFF_LOC} LOC > 500 cap"
+  fi
+  ```
+
+  c. **diff-files** — files changed ≤ 8:
+  ```bash
+  DIFF_FILES=$(git diff origin/main...HEAD --name-only | wc -l | tr -d ' ')
+  if [ "${DIFF_FILES:-0}" -gt 8 ]; then
+      halt_gate "diff-files" "${DIFF_FILES} files > 8 cap"
+  fi
+  ```
+
+  d. **path-protection** — no paths matching `.github/**`,
+  `cmd/gc/dispatch_runtime.go`, `cmd/gc/session_lifecycle_*.go`,
+  `internal/api/**`, `internal/config/**`, `**/secrets/**`, `hooks/**`,
+  `.beads/**`, `**/migrations/**`, `bin/gc-*`:
+  ```bash
+  PROTECTED=$(git diff origin/main...HEAD --name-only | grep -E \\
+      -e '^\\.github/' \\
+      -e '^cmd/gc/dispatch_runtime\\.go$' \\
+      -e '^cmd/gc/session_lifecycle_[^/]+\\.go$' \\
+      -e '^internal/api/' \\
+      -e '^internal/config/' \\
+      -e '(^|/)secrets/' \\
+      -e '^hooks/' \\
+      -e '^\\.beads/' \\
+      -e '(^|/)migrations/' \\
+      -e '^bin/gc-' || true)
+  if [ -n "$PROTECTED" ]; then
+      OFFENDERS=$(echo "$PROTECTED" | tr '\\n' ',' | sed 's/,$//')
+      halt_gate "path-protection" "touches protected paths: ${OFFENDERS}"
+  fi
+  ```
+
+  e. **issue-label** — none of {breaking-change, requires-design,
+  requires-discussion, epic, tracking, arch, discussion-needed, policy}:
+  ```bash
+  UPSTREAM_REPO=$(gh repo view --json parent --jq '.parent.nameWithOwner // empty')
+  [ -z "$UPSTREAM_REPO" ] && UPSTREAM_REPO=$(gh repo view --json nameWithOwner --jq '.nameWithOwner')
+  LABELS=$(gh issue view "$ISSUE_NUM" --repo "$UPSTREAM_REPO" --json labels --jq '[.labels[].name] | join(",")')
+  BLOCKERS=""
+  for L in breaking-change requires-design requires-discussion epic tracking arch discussion-needed policy; do
+      echo ",$LABELS," | grep -q ",${L}," && BLOCKERS="${BLOCKERS}${L},"
+  done
+  if [ -n "$BLOCKERS" ]; then
+      halt_gate "issue-label" "blocking labels: ${BLOCKERS%,}"
+  fi
+  ```
+
+  f. **issue-state** — OPEN, no existing open PR referencing via Fixes/Closes:
+  ```bash
+  STATE=$(gh issue view "$ISSUE_NUM" --repo "$UPSTREAM_REPO" --json state --jq '.state')
+  if [ "$STATE" != "OPEN" ]; then
+      halt_gate "issue-state" "issue #${ISSUE_NUM} state=${STATE}, expected OPEN"
+  fi
+  EXISTING_PR=$(gh pr list --repo "$UPSTREAM_REPO" --state open \\
+      --search "in:body \\"Fixes #${ISSUE_NUM}\\" OR \\"Closes #${ISSUE_NUM}\\"" \\
+      --json url --jq '.[0].url // empty')
+  if [ -n "$EXISTING_PR" ]; then
+      halt_gate "issue-state" "existing open PR references issue #${ISSUE_NUM}: ${EXISTING_PR}"
+  fi
+  ```
+
+  g. **base-ci** — no fresh main CI failure within 6h:
+  ```bash
+  SIX_H_AGO=$(date -u -d '6 hours ago' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \\
+      || python3 -c "import datetime; print((datetime.datetime.utcnow() - datetime.timedelta(hours=6)).strftime('%Y-%m-%dT%H:%M:%SZ'))")
+  FRESH_FAIL=$(gh run list --repo "$UPSTREAM_REPO" --branch main \\
+      --status failure --limit 5 --json createdAt \\
+      --jq "[.[] | select(.createdAt >= \\"$SIX_H_AGO\\")] | length")
+  if [ "${FRESH_FAIL:-0}" -gt 0 ]; then
+      halt_gate "base-ci" "${FRESH_FAIL} fresh main CI failure(s) within 6h; refusing to stack auto-push on a broken base"
+  fi
+  ```
+
+  h. **commit-count** — ≤ 5 commits ahead of origin/main:
+  ```bash
+  COMMITS=$(git rev-list origin/main..HEAD --count)
+  if [ "${COMMITS:-0}" -gt 5 ]; then
+      halt_gate "commit-count" "${COMMITS} commits ahead > 5 cap; squash before auto-push"
+  fi
+  ```
+
+  i. **branch-name** — matches `^(fix|feat)/.+-[0-9]+$`:
+  ```bash
+  if ! echo "$BRANCH" | grep -qE '^(fix|feat)/.+-[0-9]+$'; then
+      halt_gate "branch-name" "${BRANCH} does not match ^(fix|feat)/.+-[0-9]+\\$ — conventional naming required for auto-push class"
+  fi
+  ```
+
+  j. **polecat-confidence** — must equal "high" (read from
+  `metadata.polecat_confidence` written by an earlier step; default
+  "medium" treated as gate-fail):
+  ```bash
+  CONFIDENCE=$(bd show "$ROOT_ID" --json | jq -r '.[0].metadata.polecat_confidence // "medium"')
+  if [ "$CONFIDENCE" != "high" ]; then
+      halt_gate "polecat-confidence" "polecat_confidence=${CONFIDENCE}, required: high"
+  fi
+  ```
+
+**4. All gates passed — write evidence and arm the bypass token:**
+
+```bash
+BYPASS_TOKEN="auto_push_validated:${ROOT_ID}"
+bd update "$ROOT_ID" \\
+  --set-metadata "evidence.gate_passed=true" \\
+  --set-metadata "evidence.auto_push_bypass_token=${BYPASS_TOKEN}" \\
+  --set-metadata "evidence.gate_diff_loc=${DIFF_LOC}" \\
+  --set-metadata "evidence.gate_diff_files=${DIFF_FILES}" \\
+  --set-metadata "evidence.gate_commits=${COMMITS}" \\
+  --set-metadata "evidence.gate_confidence=${CONFIDENCE}"
+export GASCITY_SHIP_BYPASS="${BYPASS_TOKEN}"
+echo "[gate-auto-push-eligibility] all gates pass. Bypass armed: ${BYPASS_TOKEN}"
+```
+
+The `GASCITY_SHIP_BYPASS` env export is consumed by the
+`gascity-ship-gate` PreToolUse hook in the `open-pr` step (see design
+doc §5). The `evidence.auto_push_bypass_token` metadata is the persisted
+form — `open-pr` re-exports it from metadata to guarantee the env var is
+set when the push runs, regardless of whether the formula runner preserves
+env across step boundaries.
+
+**Exit criteria:** Either halted (root closed, `gc.halt_chain=true` and
+`gc.escalate_to=mayor` set, summary_for_human routes to mayor) or cleared
+(evidence.gate_passed=true written; molecule advances to open-pr)."""
+
+[[steps]]
 id = "open-pr"
 title = "Push fork + open PR upstream"
-needs = ["gate-after-ship"]
+needs = ["gate-auto-push-eligibility"]
 description = """
 Push the implementation branch to the contributor's fork and open the PR
 on `gastownhall/gascity`. The first step that performs WRITES to the
@@ -366,6 +576,8 @@ ROOT_ID=$(bd mol current --json | jq -r '.molecule_id')
 BRANCH=$(git branch --show-current)
 ISSUE_NUM={{issue}}
 SKIP_OPEN_PR="{{skip_open_pr}}"
+GATE_PASSED=$(bd show "$ROOT_ID" --json | jq -r '.[0].metadata."evidence.gate_passed" // ""')
+BYPASS_TOKEN=$(bd show "$ROOT_ID" --json | jq -r '.[0].metadata."evidence.auto_push_bypass_token" // ""')
 ```
 
 **2. Honor skip_open_pr=true (early-exit before any write):**
@@ -388,6 +600,44 @@ Note: this is a soft-success close. The loop-close handler surfaces the
 reader's perspective, it reads as "halted at the open-pr step by your own
 flag" rather than a full success. That's intentional — the chain
 intentionally stopped short of opening the PR.
+
+**2.5 Honor auto-push gate (soft early-exit when gate did not write pass):**
+
+`gate-auto-push-eligibility` either set `evidence.gate_passed=true` (and an
+`evidence.auto_push_bypass_token`) when `auto_push=true` AND every
+mechanical check passed, or skipped silently when `auto_push != "true"`,
+or halted the chain when a gate fired. The chain only reaches this point
+in the first two cases; the third closes the root bead at the gate step.
+
+If `GATE_PASSED != "true"` (gate skipped because auto_push wasn't armed,
+or evidence missing for any other reason), soft-halt at branch-ready —
+same shape as the `skip_open_pr=true` exit, distinguishable by
+`summary_for_human`:
+
+```bash
+if [ "$GATE_PASSED" != "true" ]; then
+    COMMIT_SHA=$(git rev-parse HEAD)
+    bd update "$ROOT_ID" \\
+      --set-metadata "evidence.artifact_path=git:$COMMIT_SHA" \\
+      --set-metadata "evidence.reviewer_verdict=pass" \\
+      --set-metadata "evidence.reviewer_agent=<this polecat session>" \\
+      --set-metadata "evidence.branch=$BRANCH" \\
+      --set-metadata "summary_for_human=Branch $BRANCH ready at $COMMIT_SHA for issue #$ISSUE_NUM. auto_push not armed (default-deny) — no push, no PR. To proceed: re-sling with --var auto_push=true so the eligibility gate runs, or push manually with: git push <fork-remote> $BRANCH."
+    bd close "$ROOT_ID" --reason "auto_push=false; branch ready, halted at open-pr soft gate"
+    exit 0
+fi
+```
+
+If `GATE_PASSED == "true"`, re-export the bypass token so the
+`gascity-ship-gate` PreToolUse hook accepts the upcoming `git push` and
+`gh pr create` regardless of whether the formula runner preserved env
+across the gate-step → open-pr-step boundary:
+
+```bash
+if [ -n "$BYPASS_TOKEN" ]; then
+    export GASCITY_SHIP_BYPASS="$BYPASS_TOKEN"
+fi
+```
 
 **3. Resolve the fork and upstream identities.**
 
