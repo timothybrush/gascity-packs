@@ -1,0 +1,461 @@
+description = """
+Implementation workflow for an approved GC plan.
+
+This formula starts from the task DAG produced by `gc.decompose`, routes the
+implementation beads to a worker target, waits for the DAG to close through
+natural bead dependencies, then runs two Ralph loops:
+
+1. gap analysis against the approved requirements/design/tasks artifacts
+2. code review and fix iteration until no critical/blocker/major findings remain
+
+It intentionally stays pack-generic. The consuming city supplies its worker
+target, repository commands, and optional PR policy; the formula defines the
+coordination contract and durable artifacts.
+"""
+formula = "implement"
+version = 1
+contract = "graph.v2"
+
+[vars]
+[vars.plan_slug]
+description = "Plan slug whose approved requirements/design/tasks artifacts should be implemented"
+required = true
+
+[vars.artifact_root]
+description = "Plan artifact root. Defaults to .gc/plans relative to the target rig root."
+default = ".gc/plans"
+
+[vars.tasks_file]
+description = "Explicit tasks.md path. If empty, use <artifact_root>/<plan_slug>/tasks.md."
+default = ""
+
+[vars.design_file]
+description = "Explicit design.md path. If empty, use <artifact_root>/<plan_slug>/design.md."
+default = ""
+
+[vars.requirements_file]
+description = "Explicit requirements.md path. If empty, use <artifact_root>/<plan_slug>/requirements.md."
+default = ""
+
+[vars.work_beads]
+description = "Optional comma-separated implementation bead IDs. If empty, read the Created Beads table from tasks.md."
+default = ""
+
+[vars.worker_target]
+description = "Target passed to gc sling for implementation beads. Empty means use each bead rig's default sling target."
+default = ""
+
+[vars.branch]
+description = "Optional implementation branch name. Empty means use the current branch."
+default = ""
+
+[vars.base_ref]
+description = "Base ref used for diff and review context."
+default = "origin/main"
+
+[vars.open_pr]
+description = "Set to true to push the branch and open a PR after review passes."
+default = "false"
+
+[vars.pr_title]
+description = "Optional PR title when open_pr=true."
+default = ""
+
+[vars.pr_body]
+description = "Optional PR body when open_pr=true."
+default = ""
+
+[vars.pack_root]
+description = "Absolute path to the imported gc pack root. Required so Ralph check scripts resolve without local path assumptions."
+required = true
+
+[[steps]]
+id = "prepare"
+title = "Resolve plan artifacts and implementation state"
+description = """
+Resolve the approved plan artifacts and create durable implementation state.
+
+Rules:
+1. Resolve paths:
+   - tasks: `{{tasks_file}}`, or `{{artifact_root}}/{{plan_slug}}/tasks.md`
+   - design: `{{design_file}}`, or `{{artifact_root}}/{{plan_slug}}/design.md`
+   - requirements: `{{requirements_file}}`, or `{{artifact_root}}/{{plan_slug}}/requirements.md`
+2. Refuse to continue unless requirements and design front matter are
+   `status: approved`.
+3. Refuse to continue unless tasks front matter is `status: created`, or unless
+   `{{work_beads}}` explicitly names the implementation bead set.
+4. Resolve the implementation bead IDs:
+   - if `{{work_beads}}` is non-empty, split it on commas
+   - otherwise read the `## Created Beads` table in tasks.md and use its bead IDs
+5. Create `.gc/plans/{{plan_slug}}/implementation/`.
+6. Write `.gc/plans/{{plan_slug}}/implementation/state.json` with:
+   - artifact paths
+   - implementation bead IDs
+   - worker target
+   - base ref
+   - initial git branch and HEAD
+
+If `{{branch}}` is non-empty, create or switch to that branch from
+`{{base_ref}}` before routing work. Do not create a branch if the worktree is
+dirty; stop and report the dirty files instead.
+
+Close this step with:
+
+```bash
+bd update "$GC_BEAD_ID" \
+  --set-metadata gc.outcome=pass \
+  --set-metadata gc.work_dir="$(pwd)" \
+  --set-metadata work_dir="$(pwd)" \
+  --status closed
+```
+
+On validation failure, close with `gc.outcome=fail`,
+`gc.failure_class=hard`, and a short `gc.failure_reason`.
+"""
+
+[steps.retry]
+max_attempts = 3
+on_exhausted = "hard_fail"
+
+[[steps]]
+id = "route-work"
+title = "Route the implementation DAG to workers"
+needs = ["prepare"]
+description = """
+Route the implementation bead DAG to the configured worker target.
+
+Use the implementation bead IDs recorded in
+`.gc/plans/{{plan_slug}}/implementation/state.json`.
+
+Routing contract:
+1. Verify every bead exists and is not closed before routing.
+2. Verify `bd dep cycles` is clean for the target store.
+3. Compute current DAG heads: implementation beads with no open blockers.
+4. Route every implementation bead to `{{worker_target}}` so downstream beads
+   are already hook-visible when their dependencies close. Leave dependencies
+   intact; do not flatten, remove, or bypass the DAG.
+5. Nudge the worker target after routing. If `{{worker_target}}` is empty, use
+   the bead rig's default sling target via the single-argument `gc sling <bead>`
+   form, then nudge the configured default when one is discoverable.
+
+Example command shapes:
+
+```bash
+# Explicit target:
+gc sling "{{worker_target}}" "$BEAD_ID" --reassign --nudge
+
+# Default target for the bead's rig:
+gc sling "$BEAD_ID" --reassign --nudge
+```
+
+Record in state.json:
+- routed_at
+- routed_beads
+- initial_ready_heads
+
+Do not mark unrelated beads ready, update sibling workflow beads, or claim the
+implementation beads yourself. This step only routes them.
+"""
+
+[steps.retry]
+max_attempts = 3
+on_exhausted = "hard_fail"
+
+[[steps]]
+id = "wait-for-work"
+title = "Wait for the implementation DAG to close"
+needs = ["route-work"]
+description = """
+Wait until all implementation beads are closed.
+
+Completion source of truth is live bead state, not files, branch names, or
+worker claims. Repeatedly inspect the implementation bead IDs from state.json:
+
+```bash
+bd list --id "$CSV_BEAD_IDS" --all --json
+```
+
+Loop behavior:
+1. If all implementation beads are closed, record `work_completed_at` and close
+   this step.
+2. If some beads are open and currently ready, make sure they remain routed to
+   the worker target and nudge the target.
+3. If open beads are blocked only by other implementation beads, keep waiting.
+4. If an open bead is blocked by a bead outside the implementation set, stop
+   with `gc.outcome=fail`, `gc.failure_class=hard`, and a reason naming the
+   external blocker.
+5. If a bead is closed with an explicit failure outcome, stop and surface that
+   bead as the blocker.
+
+Use bounded sleeps and periodic status output. Do not create status files and
+do not infer completion from Git state.
+"""
+
+[steps.retry]
+max_attempts = 3
+on_exhausted = "hard_fail"
+
+[[steps]]
+id = "prepare-gap-context"
+title = "Prepare implementation gap context"
+needs = ["wait-for-work"]
+description = """
+Create `.gc/plans/{{plan_slug}}/implementation/gap-context.md`.
+
+The context must include:
+- requirements/design/tasks artifact paths
+- implementation bead IDs and closure summaries
+- current branch and `{{base_ref}}..HEAD` diff summary
+- files changed
+- test commands reported by worker beads
+- known caveats from worker bead notes
+
+This is the durable input to the gap-analysis Ralph loop. Keep it concise:
+include enough evidence for the reviewer to compare design intent to code, but
+do not copy large source files or full transcripts into the artifact.
+"""
+
+[steps.retry]
+max_attempts = 3
+on_exhausted = "hard_fail"
+
+[[steps]]
+id = "gap-analysis-loop"
+title = "Gap analysis and fix loop"
+needs = ["prepare-gap-context"]
+description = "Ralph loop that checks whether the approved design is fully represented in the implementation."
+
+[steps.ralph]
+max_attempts = 999
+
+[steps.ralph.check]
+mode = "exec"
+path = "{{pack_root}}/scripts/checks/gap-analysis-approved.sh"
+timeout = "10m"
+
+[[steps.children]]
+id = "analyze-gaps"
+title = "Analyze implementation gaps"
+description = """
+Read requirements.md, design.md, tasks.md, gap-context.md, and the current
+`{{base_ref}}..HEAD` diff. Produce:
+
+`.gc/plans/{{plan_slug}}/implementation/gap-analysis-attempt-$GC_ITERATION.md`
+
+The report must answer:
+- Which design obligations are implemented?
+- Which obligations are partially implemented?
+- Which obligations are missing?
+- Which task acceptance criteria remain unproven?
+- Which files/tests demonstrate coverage?
+
+Classify every finding as `critical`, `blocker`, `major`, `minor`, or `nit`.
+Critical/blocker/major findings require another Ralph iteration. Minor/nit
+findings may be recorded without blocking if they do not violate the approved
+requirements/design.
+
+Close with `gc.outcome=pass` and set `gap_analysis.report_path`.
+"""
+
+[steps.children.retry]
+max_attempts = 3
+on_exhausted = "hard_fail"
+
+[[steps.children]]
+id = "apply-gap-fixes"
+title = "Apply missing implementation work"
+needs = ["analyze-gaps"]
+description = """
+Read the gap-analysis report for this attempt.
+
+If the report contains no critical/blocker/major findings:
+
+```bash
+bd update "$GC_BEAD_ID" \
+  --set-metadata gap_analysis.verdict=done \
+  --set-metadata gc.outcome=pass \
+  --status closed
+```
+
+If the report contains critical/blocker/major findings:
+1. Apply the smallest code/test/doc changes needed to close those gaps.
+2. Run the relevant verification commands.
+3. Commit the changes atomically.
+4. Close with:
+
+```bash
+bd update "$GC_BEAD_ID" \
+  --set-metadata gap_analysis.verdict=iterate \
+  --set-metadata gc.outcome=pass \
+  --status closed
+```
+
+Do not expand scope beyond the approved design. If a required fix contradicts
+the design or requirements, stop with `gc.outcome=fail`,
+`gc.failure_class=hard`, and a concise reason.
+"""
+
+[steps.children.retry]
+max_attempts = 3
+on_exhausted = "hard_fail"
+
+[[steps]]
+id = "prepare-review-context"
+title = "Prepare final review context"
+needs = ["gap-analysis-loop"]
+description = """
+Create `.gc/plans/{{plan_slug}}/implementation/review-context.md`.
+
+The context must include:
+- approved artifact paths
+- final implementation bead list and closure status
+- gap-analysis final report path
+- current branch and `{{base_ref}}..HEAD` diff summary
+- changed files
+- verification commands and outcomes
+- any known residual risks
+
+This context is the stable input to the review Ralph loop.
+"""
+
+[steps.retry]
+max_attempts = 3
+on_exhausted = "hard_fail"
+
+[[steps]]
+id = "review-loop"
+title = "Review and fix loop"
+needs = ["prepare-review-context"]
+description = "Ralph loop that reviews the completed implementation and fixes critical/blocker/major findings."
+
+[steps.ralph]
+max_attempts = 999
+
+[steps.ralph.check]
+mode = "exec"
+path = "{{pack_root}}/scripts/checks/implementation-review-approved.sh"
+timeout = "10m"
+
+[[steps.children]]
+id = "review-implementation"
+title = "Review the implementation"
+description = """
+Review the current implementation using the consuming repo's standard review
+process. If a dedicated review formula, skill, or command exists, use it;
+otherwise perform a direct review of `{{base_ref}}..HEAD` against:
+
+- behavioral correctness
+- design/requirements fidelity
+- dependency and integration impact
+- concurrency and state safety
+- error handling and resilience
+- security surface
+- resource lifecycle
+- release safety
+- test evidence
+- architectural consistency
+- debuggability
+
+Write:
+
+`.gc/plans/{{plan_slug}}/implementation/review-attempt-$GC_ITERATION.md`
+
+Every finding must include severity `critical`, `blocker`, `major`, `minor`,
+or `nit`, evidence, and a required fix or explicit non-action rationale.
+
+Close with `gc.outcome=pass` and set `code_review.report_path`.
+"""
+
+[steps.children.retry]
+max_attempts = 3
+on_exhausted = "hard_fail"
+
+[[steps.children]]
+id = "apply-review-fixes"
+title = "Apply review fixes and set verdict"
+needs = ["review-implementation"]
+description = """
+Read the review report for this attempt.
+
+If there are no critical/blocker/major findings:
+
+```bash
+bd update "$GC_BEAD_ID" \
+  --set-metadata code_review.verdict=done \
+  --set-metadata gc.outcome=pass \
+  --status closed
+```
+
+If critical/blocker/major findings remain:
+1. Fix them in-place.
+2. Run relevant verification.
+3. Commit fixes atomically.
+4. Close with:
+
+```bash
+bd update "$GC_BEAD_ID" \
+  --set-metadata code_review.verdict=iterate \
+  --set-metadata gc.outcome=pass \
+  --status closed
+```
+
+Do not suppress findings by editing the report. The next review attempt must
+inspect the actual code state.
+"""
+
+[steps.children.retry]
+max_attempts = 3
+on_exhausted = "hard_fail"
+
+[[steps]]
+id = "finalize"
+title = "Commit final state and summarize"
+needs = ["review-loop"]
+description = """
+Ensure the implementation is committed and summarize the final state.
+
+Rules:
+1. Run the verification commands named in the design/tasks artifacts, plus any
+   repo-standard checks that apply to changed files.
+2. If the worktree has unstaged or staged changes, inspect them. Commit only
+   intentional implementation/review changes; fail on unrelated dirt.
+3. Verify `git diff --stat {{base_ref}}..HEAD` is non-empty.
+4. Write `.gc/plans/{{plan_slug}}/implementation/final-summary.md` with:
+   - branch
+   - final commit SHA
+   - changed files summary
+   - verification commands and results
+   - gap-analysis final verdict
+   - review final verdict
+   - PR status: not requested or pending open
+5. Close with `gc.outcome=pass`.
+"""
+
+[steps.retry]
+max_attempts = 3
+on_exhausted = "hard_fail"
+
+[[steps]]
+id = "optional-pr"
+title = "Optionally push and open a PR"
+needs = ["finalize"]
+description = """
+If `{{open_pr}}` is not `true`, do not push. Update final-summary.md with the
+branch and final commit SHA, then close pass.
+
+If `{{open_pr}}` is `true`:
+1. Refuse to push from `main`, `master`, or the repository default branch.
+2. Push the current branch to its configured remote.
+3. Open a PR with `gh pr create`.
+   - use `{{pr_title}}` when non-empty, otherwise derive a title from the plan
+   - use `{{pr_body}}` when non-empty, otherwise point to final-summary.md and
+     summarize verification
+4. Record PR URL/number in final-summary.md and this bead's metadata.
+
+This step opens a PR only. It does not merge, approve, label, or alter external
+review policy.
+"""
+
+[steps.retry]
+max_attempts = 3
+on_exhausted = "hard_fail"
