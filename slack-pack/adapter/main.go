@@ -323,6 +323,21 @@ type config struct {
 	// <GC_CITY_PATH>/.gc/slack/rig_mappings.json when GC_CITY_PATH is
 	// set, else /tmp/gc-slack-adapter/rig_mappings.json.
 	rigMappingPath string
+	// subteamAliasStorePath is the JSON file mapping Slack User Group
+	// ("subteam") IDs (e.g. "S0123ABCD") to gc handles. Read-only on
+	// this side; same SIGHUP-or-restart reload contract as
+	// channelMappingPath. The operator edits the file directly or via a
+	// future `gc slack subteam-alias` command. The map is the ONLY gate
+	// for the UNLABELED subteam mention shape `<!subteam^Sxxx>` Slack
+	// emits in event payloads — without an entry the inbound falls
+	// through to channel fanout. The LABELED shape
+	// `<!subteam^Sxxx|@handle>` remains gated by handleAliasRegistry
+	// against the `@handle` label (bead gpk-2zi). Sourced from
+	// SLACK_SUBTEAM_ALIAS_FILE, defaulting to
+	// <GC_CITY_PATH>/.gc/slack/subteam-aliases.json when GC_CITY_PATH
+	// is set, else /tmp/gc-slack-adapter/subteam-aliases.json. Bead
+	// gpk-hmr.2.
+	subteamAliasStorePath string
 	// fileUploadRoot is the absolute filesystem prefix
 	// /publish-file is allowed to read. Empty disables /publish-file
 	// entirely (fail-closed). gc and the adapter share a filesystem,
@@ -450,12 +465,14 @@ func loadConfigFromEnv(getenv func(string) string) (config, error) {
 	defaultAppsRegistryPath := "/tmp/gc-slack-adapter/apps.json"
 	defaultThreadSessionsPath := "/tmp/gc-slack-adapter/thread_sessions.json"
 	defaultRoomLaunchPath := "/tmp/gc-slack-adapter/room_launch_mappings.json"
+	defaultSubteamAliasPath := "/tmp/gc-slack-adapter/subteam-aliases.json"
 	if cityPath := getenv("GC_CITY_PATH"); cityPath != "" {
 		defaultMappingPath = filepath.Join(cityPath, ".gc", "slack", "channel_mappings.json")
 		defaultRigMappingPath = filepath.Join(cityPath, ".gc", "slack", "rig_mappings.json")
 		defaultAppsRegistryPath = filepath.Join(cityPath, ".gc", "slack", "apps.json")
 		defaultThreadSessionsPath = filepath.Join(cityPath, ".gc", "slack", "thread_sessions.json")
 		defaultRoomLaunchPath = filepath.Join(cityPath, ".gc", "slack", "room_launch_mappings.json")
+		defaultSubteamAliasPath = filepath.Join(cityPath, ".gc", "slack", "subteam-aliases.json")
 		cfg.cityPath = cityPath
 	}
 	cfg.channelMappingPath = envOrFn("SLACK_CHANNEL_MAPPING_PATH", defaultMappingPath)
@@ -467,6 +484,7 @@ func loadConfigFromEnv(getenv func(string) string) (config, error) {
 	cfg.oauthSlackBaseURL = getenv("SLACK_OAUTH_BASE_URL")
 	cfg.threadSessionsStorePath = envOrFn("GC_SLACK_THREAD_SESSIONS_FILE", defaultThreadSessionsPath)
 	cfg.roomLaunchPath = envOrFn("GC_SLACK_ROOM_LAUNCH_FILE", defaultRoomLaunchPath)
+	cfg.subteamAliasStorePath = envOrFn("SLACK_SUBTEAM_ALIAS_FILE", defaultSubteamAliasPath)
 
 	// Retention controls. Defaults: keep inbound files for 7 days,
 	// sweep every hour. Setting either to "0" disables the janitor.
@@ -925,6 +943,13 @@ func main() {
 	log.Printf("room launch mapping registry: store=%s (read-only; SIGHUP or restart to reload)",
 		cfg.roomLaunchPath)
 
+	subteamAliases, err := newSubteamAliasMap(cfg.subteamAliasStorePath)
+	if err != nil {
+		log.Fatalf("subteam alias map: %v", err)
+	}
+	log.Printf("subteam alias map: store=%s entries=%d (read-only; SIGHUP or restart to reload)",
+		cfg.subteamAliasStorePath, subteamAliases.Len())
+
 	channelMapReg, err := newChannelMappingRegistry(cfg.channelMappingPath)
 	if err != nil {
 		log.Fatalf("channel mapping registry: %v", err)
@@ -961,7 +986,7 @@ func main() {
 	// (HMAC-verified) and /healthz. Bound to 0.0.0.0 by default so
 	// Tailscale Funnel can reach it.
 	publicMux := http.NewServeMux()
-	publicMux.HandleFunc("/slack/events", handleSlackEvents(cfg, aliasReg, threadReg, roomLaunchReg))
+	publicMux.HandleFunc("/slack/events", handleSlackEvents(cfg, aliasReg, threadReg, roomLaunchReg, subteamAliases))
 	publicMux.HandleFunc("/slack/interactions", handleSlackInteractions(cfg, channelMapReg, rigMapReg))
 	registerOAuthHandlers(publicMux, cfg, appsReg)
 	publicMux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
@@ -1058,7 +1083,7 @@ func main() {
 	signal.Notify(hupCh, syscall.SIGHUP)
 	defer signal.Stop(hupCh)
 	go runReloadLoop(reloadStop, hupCh, func() {
-		logReloadOutcome(appsReg, channelMapReg, rigMapReg, roomLaunchReg)
+		logReloadOutcome(appsReg, channelMapReg, rigMapReg, roomLaunchReg, subteamAliases)
 	})
 
 	stop := make(chan os.Signal, 1)
@@ -1691,7 +1716,7 @@ func postToSlack(token string, req slackPostMessageReq) (*slackPostMessageResp, 
 	return &sr, nil
 }
 
-func handleSlackEvents(cfg config, aliasReg *handleAliasRegistry, threadReg *threadSessionRegistry, roomLaunchReg *roomLaunchMappingRegistry) http.HandlerFunc {
+func handleSlackEvents(cfg config, aliasReg *handleAliasRegistry, threadReg *threadSessionRegistry, roomLaunchReg *roomLaunchMappingRegistry, subteamMap *subteamAliasMap) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -1746,7 +1771,7 @@ func handleSlackEvents(cfg config, aliasReg *handleAliasRegistry, threadReg *thr
 		// cfg.dispatchSem when an inbound triggers an alias dispatch (which
 		// would otherwise hold two slots concurrently — see gc-cby.26
 		// Phase 4 review fix).
-		go processSlackEvent(cfg, aliasReg, threadReg, roomLaunchReg, env, release)
+		go processSlackEvent(cfg, aliasReg, threadReg, roomLaunchReg, subteamMap, env, release)
 	}
 }
 
@@ -1860,7 +1885,7 @@ func slackKindFromChannelType(channelType, channelID string) string {
 // in tests or in deployments that disable launcher mode entirely; the
 // `@@<handle>` branch falls through to the regular `@<handle>` path
 // when nil.
-func processSlackEvent(cfg config, aliasReg *handleAliasRegistry, threadReg *threadSessionRegistry, roomLaunchReg *roomLaunchMappingRegistry, env slackEventEnvelope, release func()) {
+func processSlackEvent(cfg config, aliasReg *handleAliasRegistry, threadReg *threadSessionRegistry, roomLaunchReg *roomLaunchMappingRegistry, subteamMap *subteamAliasMap, env slackEventEnvelope, release func()) {
 	released := false
 	defer func() {
 		if !released {
@@ -1903,7 +1928,52 @@ func processSlackEvent(cfg config, aliasReg *handleAliasRegistry, threadReg *thr
 
 	text := msg.Text
 	target := ""
-	if cfg.handlePrefix != "" {
+	// Slack User Group mentions (beads gpk-2zi + gpk-hmr.2). Slack
+	// delivers two shapes for a User Group mention and both must
+	// normalize to the same address-by-handle dispatch path:
+	//
+	//   Labeled:    <!subteam^TEAMID|@handle>   (autocomplete in text)
+	//   Unlabeled:  <!subteam^TEAMID>           (event-payload form)
+	//
+	// Different gating policy per shape, intentional asymmetry:
+	//
+	//   - LABELED: gated by aliasReg.Get(@handle) — same gate as the
+	//     `@handle:` text-prefix path. The label is in the message
+	//     itself, so the gate prevents arbitrary in-workspace User
+	//     Groups (whose labels happen to look like gc handle names but
+	//     have no registered session) from auto-routing.
+	//
+	//   - UNLABELED: gated by subteamAliasMap.Get(TEAMID) — Slack does
+	//     NOT emit a handle label in this shape, so the operator-edited
+	//     subteam-aliases.json IS the allowlist. A subteam ID with no
+	//     entry in the map falls through to channel fanout. Locked-down
+	//     workspaces without the `usergroups:read` scope still work:
+	//     the map is populated off-band, no Slack API call is made.
+	//
+	// Downstream dispatch (the `if target != "" && aliasReg != nil`
+	// block below) is unchanged — it still gates the cross-channel
+	// session-message POST on aliasReg.Get, so a subteam-ID resolution
+	// to a handle with no registered session yields the channel-bound
+	// session seeing ExplicitTarget but no alias goroutine firing.
+	// That matches the existing `@handle:` text-prefix semantics.
+	if h, sid, rest, ok := parseSubteamMentionPrefix(msg.Text); ok {
+		if h != "" {
+			// Labeled form: preserve gpk-2zi behavior — aliasReg gate.
+			if aliasReg != nil {
+				if _, aliased := aliasReg.Get(h); aliased {
+					target = h
+					text = rest
+				}
+			}
+		} else {
+			// Unlabeled form: subteamAliasMap is the gate.
+			if mappedHandle, mapped := subteamMap.Get(sid); mapped {
+				target = mappedHandle
+				text = rest
+			}
+		}
+	}
+	if target == "" && cfg.handlePrefix != "" {
 		if h, rest := parseHandlePrefix(msg.Text, cfg.handlePrefix); h != "" {
 			target = h
 			text = rest

@@ -289,6 +289,7 @@ package docstring at the top of that file. Summary:
 | `HANDLE_PREFIX`                | `@`                                              | Leading address token for keyword routing. Empty disables routing.              |
 | `IDENTITY_STORE_PATH`          | `/tmp/gc-slack-adapter/identities.json`          | JSON file backing the per-session `chat:write.customize` identity registry.    |
 | `HANDLE_ALIAS_STORE_PATH`      | `/tmp/gc-slack-adapter/handle-aliases.json`      | JSON file backing the cross-channel handle → session-id alias registry.        |
+| `SLACK_SUBTEAM_ALIAS_FILE`     | `<GC_CITY_PATH>/.gc/slack/subteam-aliases.json` (or `/tmp/gc-slack-adapter/subteam-aliases.json`) | Operator-edited JSON map of Slack User Group ("subteam") IDs → gc handles. Required to route the unlabeled `<!subteam^Sxxx>` mention shape; the labeled `<!subteam^Sxxx|@handle>` shape is gated by `HANDLE_ALIAS_STORE_PATH` instead. Read-only at runtime; SIGHUP or restart to reload. |
 | `INBOUND_FILE_STORE`           | `/tmp/gc-slack-adapter/inbound`                  | Directory for downloaded inbound Slack file attachments.                        |
 | `INBOUND_FILE_TTL`             | `168h` (7 days)                                  | Janitor retention. `0` disables sweeping.                                       |
 | `INBOUND_FILE_SWEEP_INTERVAL`  | `1h`                                             | Janitor scan period. `0` disables sweeping.                                     |

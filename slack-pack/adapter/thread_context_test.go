@@ -124,7 +124,7 @@ func TestThreadContext_FirstMentionPrependsPreamble(t *testing.T) {
 	})
 	env := slackEventEnvelope{Type: "event_callback", Event: rawMsg}
 
-	processSlackEvent(cfg, newTestHandleAliasRegistry(t), nil, nil, env, func() {})
+	processSlackEvent(cfg, newTestHandleAliasRegistry(t), nil, nil, nil, env, func() {})
 
 	if got := atomic.LoadInt32(calls); got != 1 {
 		t.Fatalf("conversations.replies calls = %d, want 1", got)
@@ -215,8 +215,8 @@ func TestThreadContext_SecondMentionWithoutNewActivityNoPreamble(t *testing.T) {
 	})
 
 	aliasReg := newTestHandleAliasRegistry(t)
-	processSlackEvent(cfg, aliasReg, nil, nil, slackEventEnvelope{Type: "event_callback", Event: first}, func() {})
-	processSlackEvent(cfg, aliasReg, nil, nil, slackEventEnvelope{Type: "event_callback", Event: second}, func() {})
+	processSlackEvent(cfg, aliasReg, nil, nil, nil, slackEventEnvelope{Type: "event_callback", Event: first}, func() {})
+	processSlackEvent(cfg, aliasReg, nil, nil, nil, slackEventEnvelope{Type: "event_callback", Event: second}, func() {})
 
 	// Option B: each inbound fetches. The cache filters preamble.
 	if got := atomic.LoadInt32(&calls); got != 2 {
@@ -265,7 +265,7 @@ func TestThreadContext_NonThreadInboundSkipsFetch(t *testing.T) {
 		Text:    "standalone message",
 	})
 	env := slackEventEnvelope{Type: "event_callback", Event: rawMsg}
-	processSlackEvent(cfg, newTestHandleAliasRegistry(t), nil, nil, env, func() {})
+	processSlackEvent(cfg, newTestHandleAliasRegistry(t), nil, nil, nil, env, func() {})
 
 	if got := atomic.LoadInt32(calls); got != 0 {
 		t.Errorf("conversations.replies calls = %d, want 0", got)
@@ -308,7 +308,7 @@ func TestThreadContext_ThreadParentSkipsFetch(t *testing.T) {
 		Text:     "kicking off a new thread",
 	})
 	env := slackEventEnvelope{Type: "event_callback", Event: rawMsg}
-	processSlackEvent(cfg, newTestHandleAliasRegistry(t), nil, nil, env, func() {})
+	processSlackEvent(cfg, newTestHandleAliasRegistry(t), nil, nil, nil, env, func() {})
 
 	if got := atomic.LoadInt32(calls); got != 0 {
 		t.Errorf("conversations.replies calls = %d, want 0", got)
@@ -362,7 +362,7 @@ func TestThreadContext_NoPriorsAfterFilteringEmitsNoPreamble(t *testing.T) {
 		Text:     "@mayor first mention",
 	})
 	env := slackEventEnvelope{Type: "event_callback", Event: rawMsg}
-	processSlackEvent(cfg, newTestHandleAliasRegistry(t), nil, nil, env, func() {})
+	processSlackEvent(cfg, newTestHandleAliasRegistry(t), nil, nil, nil, env, func() {})
 
 	if got := atomic.LoadInt32(calls); got != 1 {
 		t.Errorf("conversations.replies calls = %d, want 1 (one fetch attempted, no preamble emitted)", got)
@@ -414,8 +414,8 @@ func TestThreadContext_FetchFailureRetriesNextInbound(t *testing.T) {
 		return raw
 	}
 	aliasReg := newTestHandleAliasRegistry(t)
-	processSlackEvent(cfg, aliasReg, nil, nil, slackEventEnvelope{Type: "event_callback", Event: mk("600.000002")}, func() {})
-	processSlackEvent(cfg, aliasReg, nil, nil, slackEventEnvelope{Type: "event_callback", Event: mk("600.000003")}, func() {})
+	processSlackEvent(cfg, aliasReg, nil, nil, nil, slackEventEnvelope{Type: "event_callback", Event: mk("600.000002")}, func() {})
+	processSlackEvent(cfg, aliasReg, nil, nil, nil, slackEventEnvelope{Type: "event_callback", Event: mk("600.000003")}, func() {})
 
 	if got := atomic.LoadInt32(&calls); got != 2 {
 		t.Errorf("conversations.replies calls = %d, want 2 (errors must retry per inbound, not permanently suppress)", got)
@@ -494,7 +494,7 @@ func TestThreadContext_CrossAgentDeltaVisibility(t *testing.T) {
 	}
 
 	// Step 1: mayor mentioned. Should see U_ALICE's prior only.
-	processSlackEvent(cfg, aliasReg, nil, nil, slackEventEnvelope{Type: "event_callback", Event: mk("700.000002", "@mayor weigh in?")}, func() {})
+	processSlackEvent(cfg, aliasReg, nil, nil, nil, slackEventEnvelope{Type: "event_callback", Event: mk("700.000002", "@mayor weigh in?")}, func() {})
 
 	// Step 2: a peer human posts a reply. Slack returns it on
 	// subsequent fetches.
@@ -505,7 +505,7 @@ func TestThreadContext_CrossAgentDeltaVisibility(t *testing.T) {
 	// Step 3: PL mentioned. PL has no cache entry yet, so PL sees
 	// EVERYTHING posted before this inbound: U_ALICE's prior AND
 	// the U_PEER reply. This is the cross-agent visibility payoff.
-	processSlackEvent(cfg, aliasReg, nil, nil, slackEventEnvelope{Type: "event_callback", Event: mk("700.000004", "@PL your read?")}, func() {})
+	processSlackEvent(cfg, aliasReg, nil, nil, nil, slackEventEnvelope{Type: "event_callback", Event: mk("700.000004", "@PL your read?")}, func() {})
 
 	// Step 4: another peer reply lands.
 	serverMu.Lock()
@@ -518,7 +518,7 @@ func TestThreadContext_CrossAgentDeltaVisibility(t *testing.T) {
 	// (700.000006): U_PEER@700.000003 and U_PEER2@700.000005.
 	// U_ALICE@700.000001 is filtered out — already delivered to
 	// mayor at step 1.
-	processSlackEvent(cfg, aliasReg, nil, nil, slackEventEnvelope{Type: "event_callback", Event: mk("700.000006", "@mayor counter?")}, func() {})
+	processSlackEvent(cfg, aliasReg, nil, nil, nil, slackEventEnvelope{Type: "event_callback", Event: mk("700.000006", "@mayor counter?")}, func() {})
 
 	if got := atomic.LoadInt32(&calls); got != 3 {
 		t.Errorf("conversations.replies calls = %d, want 3 (one per inbound in thread)", got)
@@ -608,8 +608,8 @@ func TestThreadContext_IsolationAcrossThreads(t *testing.T) {
 		Text: "@mayor in B",
 	})
 	aliasReg := newTestHandleAliasRegistry(t)
-	processSlackEvent(cfg, aliasReg, nil, nil, slackEventEnvelope{Type: "event_callback", Event: threadA}, func() {})
-	processSlackEvent(cfg, aliasReg, nil, nil, slackEventEnvelope{Type: "event_callback", Event: threadB}, func() {})
+	processSlackEvent(cfg, aliasReg, nil, nil, nil, slackEventEnvelope{Type: "event_callback", Event: threadA}, func() {})
+	processSlackEvent(cfg, aliasReg, nil, nil, nil, slackEventEnvelope{Type: "event_callback", Event: threadB}, func() {})
 
 	msgs := capture.snapshot()
 	if len(msgs) != 2 {
