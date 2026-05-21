@@ -2041,6 +2041,29 @@ func processSlackEvent(cfg config, aliasReg *handleAliasRegistry, threadReg *thr
 	log.Printf("inbound: chan=%s user=%s ts=%s thread=%s target=%q files=%d text=%dch",
 		msg.Channel, msg.User, msg.TS, msg.ThreadTS, target, len(attachments), len(text))
 
+	// "Eyes" reaction signals to the human that an agent was explicitly
+	// addressed (via `@handle:` prefix or a Slack User Group mention
+	// resolved via subteamAliasMap) and is processing the message. Only
+	// fires when a target was parsed — generic channel chatter that
+	// merely lands on the bound session via postInbound does NOT trigger
+	// the eye, because most channel messages aren't intentionally
+	// directed at an agent. Fires once per inbound (the alias-dispatch
+	// fanout below targets the same Slack TS, so a duplicate react would
+	// be a Slack no-op). Best-effort: errors are logged and don't block
+	// the dispatch path.
+	if target != "" && cfg.slackBotToken != "" {
+		go func(channel, ts string) {
+			_, err := postReactionToSlack(cfg.slackBotToken, slackReactionsAddReq{
+				Channel:   channel,
+				Name:      "eyes",
+				Timestamp: ts,
+			})
+			if err != nil {
+				log.Printf("react eyes failed: chan=%s ts=%s: %v", channel, ts, err)
+			}
+		}(msg.Channel, msg.TS)
+	}
+
 	// Cross-channel address-by-handle: if the parsed target matches a
 	// registered alias, dispatch the inbound directly to the aliased
 	// session via gc's session-message API, regardless of channel
