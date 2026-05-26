@@ -13,6 +13,8 @@ City work:
 - `gc.build` runs the full front-half approval flow and launches durable
   `build-run` for implement, gap-analysis/fix, review/fix, final reporting, and
   optional publish.
+- `gc.gh-issue-triage`, `gc.gh-pr-review`, and `gc.gh-issue-fix` adapt
+  canonical GitHub issue/PR URLs into the generic gc workflows.
 
 Import it with the `gc` binding:
 
@@ -88,3 +90,41 @@ with `verdict: pass|fail`. Validate with:
 ```sh
 python3 <pack-root>/assets/scripts/validate_verdict_report.py report.md --kind review
 ```
+
+## GitHub Adapter Workflows
+
+The GitHub workflows are targetless `graph.v2` formulas. They accept only full
+canonical URLs:
+
+```text
+https://github.com/<owner>/<repo>/issues/<number>
+https://github.com/<owner>/<repo>/pull/<number>
+```
+
+Launch triage:
+
+```sh
+gc sling <coordinator-target> github-issue-triage --formula \
+  --var github_issue_url=https://github.com/<owner>/<repo>/issues/<number>
+```
+
+Launch PR review:
+
+```sh
+gc sling <coordinator-target> github-pr-review --formula \
+  --var github_pr_url=https://github.com/<owner>/<repo>/pull/<number> \
+  --var post_mode=human_gate
+```
+
+Launch issue fix:
+
+```sh
+gc sling <coordinator-target> github-issue-fix --formula \
+  --var github_issue_url=https://github.com/<owner>/<repo>/issues/<number> \
+  --var mode=interactive \
+  --var pr_mode=none
+```
+
+GitHub API calls go through wrapper scripts in
+`<pack-root>/assets/scripts/`. Formulas should call those wrappers, not `gh`
+directly, except when diagnosing wrapper failures.
