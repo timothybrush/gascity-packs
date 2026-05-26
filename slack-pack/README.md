@@ -171,6 +171,20 @@ Slack  ──HMAC──▶  Go adapter :8775  ──▶ gc /extmsg/inbound
                    └────────────────┘
 ```
 
+The adapter's `/publish` endpoint **requires session attribution**: every
+request must carry a `session_id` (or, for older gc binaries, the legacy
+`metadata.source_session_id`). A request with neither is rejected with HTTP
+400 and nothing is posted to Slack:
+
+```json
+{"error": "publish requires session attribution: provide session_id or metadata.source_session_id"}
+```
+
+This fails closed against identity-less channel-root posts under the default
+bot identity. System/bot status notifications that intentionally post as the bot
+go through `gc slack post-message` (direct to Slack `chat.postMessage`),
+which bypasses `/publish` entirely and is unaffected by this guard.
+
 ## Install
 
 ```toml

@@ -1177,11 +1177,6 @@ func handlePublish(cfg config, reg *identityRegistry) http.HandlerFunc {
 			return
 		}
 
-		post := slackPostMessageReq{
-			Channel:  req.Conversation.ConversationID,
-			Text:     req.Text,
-			ThreadTS: req.ReplyToMessageID,
-		}
 		// SessionID precedence: explicit field wins (used by direct-to-adapter
 		// callers like smoke tests). Otherwise fall back to the wire-metadata
 		// key gc populates when forwarding from /v0/city/.../extmsg/outbound.
@@ -1189,8 +1184,33 @@ func handlePublish(cfg config, reg *identityRegistry) http.HandlerFunc {
 		if identitySessionID == "" {
 			identitySessionID = req.Metadata[metadataKeySourceSessionID]
 		}
+		// Fail closed on identity-less publishes (gpk-jqou). With neither the
+		// native session_id nor the legacy metadata.source_session_id set, the
+		// adapter would otherwise post at channel root under the default bot
+		// identity (as=""), which surfaced as the spurious "gc oversight PL
+		// replied in channel" anomaly on 2026-05-25. Every legitimate /publish
+		// caller carries a session — the gc HandleOutbound path and the
+		// publish / publish-to-channel / reply-current CLIs all resolve one (or
+		// fail closed) before reaching here, and system bot notifications use
+		// `gc slack post-message`, which posts to Slack directly and never
+		// traverses this endpoint. So rejecting attribution-less requests has
+		// no legitimate caller to break; it only closes the regression door.
+		if identitySessionID == "" {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(map[string]string{
+				"error": "publish requires session attribution: provide session_id or metadata.source_session_id",
+			})
+			return
+		}
+
+		post := slackPostMessageReq{
+			Channel:  req.Conversation.ConversationID,
+			Text:     req.Text,
+			ThreadTS: req.ReplyToMessageID,
+		}
 		identityApplied := ""
-		if reg != nil && identitySessionID != "" {
+		if reg != nil {
 			if rec, ok := reg.Get(identitySessionID); ok {
 				post.Username = rec.Username
 				post.IconURL = rec.IconURL
