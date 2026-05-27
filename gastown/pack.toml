@@ -2,8 +2,8 @@
 #
 # Gastown roles: mayor (coordinator), deacon (patrol), boot (watchdog),
 # plus rig-scoped agents (witness, refinery, polecat).
-# Dog (utility pool) is defined here with tmux theming; maintenance provides
-# the fallback (unthemed) dog. Mechanical housekeeping lives in maintenance.
+# The host Gas City runtime supplies the implicit maintenance/core utility
+# layer that provides dog workers and mechanical housekeeping.
 #
 # Referenced by both workspace.pack and rigs[].pack:
 #   workspace.pack → expands city-scoped agents only (mayor, deacon, boot)
@@ -14,9 +14,6 @@
 [pack]
 name = "gastown"
 schema = 2
-
-[imports.maintenance]
-source = "../maintenance"
 
 [global]
 session_live = [
