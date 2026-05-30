@@ -29,28 +29,18 @@ default = "false"
 id = "preflight"
 title = "Run publish preflight"
 metadata = { "gc.run_target" = "gc.run-operator" }
-description = """
-Validate auth, token scope, remote, branch names, PR base, collision policy,
-protected/default targets, sanitized metadata, final report {{final_report}},
-push authorization {{push}}, and open_pr authorization {{open_pr}}.
-"""
+description_file = "../assets/workflows/publish/preflight.md"
 
 [[steps]]
 id = "push"
 title = "Push branch if authorized"
 needs = ["preflight"]
 metadata = { "gc.run_target" = "gc.publisher" }
-description = """
-If push is {{push}}, use create-if-absent or expected-object-id update only.
-Fail closed if the remote cannot enforce atomic or lease-checked semantics.
-"""
+description_file = "../assets/workflows/publish/push.md"
 
 [[steps]]
 id = "open-pr"
 title = "Open PR if authorized"
 needs = ["push"]
 metadata = { "gc.run_target" = "gc.publisher" }
-description = """
-If open_pr is {{open_pr}}, create a PR only after push succeeds and sanitized
-title/body from final report {{final_report}} pass policy.
-"""
+description_file = "../assets/workflows/publish/open-pr.md"

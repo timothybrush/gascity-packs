@@ -46,25 +46,7 @@ default = "false"
 id = "prepare"
 title = "Validate implementation convoy"
 metadata = { "gc.run_target" = "gc.run-operator" }
-description = """
-Validate graph.v2 target state before side effects.
-
-This step is validation only. Do not edit source files in the launcher checkout,
-any existing worktree, or any newly created path. Do not create, modify, or commit source code. Do not run implementation or test-fix loops.
-
-Requirements:
-- read reserved `convoy_id` from core graph context
-- fail if the target is not a convoy or normalized singleton convoy
-- reject legacy `issue`, `bead_id`, or user-supplied `convoy_id` inputs
-- validate context_path {{context_path}} with `{{pack_root}}/assets/scripts/validate_context_bundle.py` when set
-- reject drain_policy {{drain_policy}} values other than `separate` or `same-session`
-- inspect the convoy target branch, defaulting to the repo default branch
-- write a run-status artifact if summary_path {{summary_path}} or artifact root is provided
-- record push {{push}} and open_pr {{open_pr}}
-
-Close pass only after no workflow roots, drain controls, routed beads,
-worktrees, refs, or publish records have been created before validation.
-"""
+description_file = "../assets/workflows/implement/prepare.md"
 
 [[steps]]
 id = "drain-separate"
@@ -72,13 +54,7 @@ title = "Drain implementation convoy into separate sessions"
 needs = ["prepare"]
 condition = "{{drain_policy}} == separate"
 metadata = { "gc.run_target" = "gc.implementation-worker" }
-description = """
-Use core graph.v2 drain to materialize one full `do-work` lifecycle per
-selected non-convoy runnable member. The pack does not enumerate members before
-formula instantiation; core owns drain-unit convoy creation and manifest state.
-Drain item workflows route through this pack's implementation and operator role
-agents.
-"""
+description_file = "../assets/workflows/implement/drain-separate.md"
 
 [steps.drain]
 context = "separate"
@@ -91,11 +67,7 @@ title = "Drain implementation convoy in one shared session"
 needs = ["prepare"]
 condition = "{{drain_policy}} == same-session"
 metadata = { "gc.run_target" = "gc.implementation-worker" }
-description = """
-Same-session is pack policy. Emit core shared drain, require one executable item
-lane, and fail closed if core cannot prove dependency-safe manifest order.
-Use context path {{context_path}} for each shared item when set.
-"""
+description_file = "../assets/workflows/implement/drain-same-session.md"
 
 [steps.drain]
 context = "shared"
@@ -111,29 +83,11 @@ id = "wait-for-drain"
 title = "Wait for drain completion"
 needs = ["drain-separate", "drain-same-session"]
 metadata = { "gc.run_target" = "gc.run-operator" }
-description = """
-Wait only on the core drain control bead and its `gc.drain_manifest.v1` rows.
-Success requires the drain control to be closed with `gc.drain_state=succeeded`
-and `gc.outcome=pass`, and every manifest row to have `status=succeeded` and
-`outcome_kind=pass` or a selected source anchor already closed with
-`gc.outcome=pass`. Failed, skipped, abandoned, or still-open manifest rows make
-implement fail and write the aggregate summary.
-
-Do not wait for or inspect downstream steps that depend on this bead, including
-summarize, workflow-finalize, or root workflow closure; those cannot progress
-until this bead closes. Do not close the input convoy head or the root workflow.
-On success, close only this wait step with `gc.outcome=pass`. Summary path
-override is {{summary_path}}.
-"""
+description_file = "../assets/workflows/implement/wait-for-drain.md"
 
 [[steps]]
 id = "summarize"
 title = "Write implementation summary"
 needs = ["wait-for-drain"]
 metadata = { "gc.run_target" = "gc.run-operator" }
-description = """
-Write the aggregate implementation summary, including selected anchors, drain
-policy, item result classes, report paths, commit refs when available, and any
-operator recovery instructions. Direct implement does not run gap-analysis or
-review loops. Publish settings are push {{push}} and open_pr {{open_pr}}.
-"""
+description_file = "../assets/workflows/implement/summarize.md"

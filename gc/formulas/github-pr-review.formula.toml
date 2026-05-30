@@ -44,98 +44,28 @@ default = "human_gate"
 id = "snapshot"
 title = "Snapshot GitHub PR"
 metadata = { "gc.run_target" = "gc.run-operator" }
-description = """
-Resolved GitHub PR URL: {{github_pr_url}}
-Resolved artifact root override: {{artifact_root}} (empty means use the rig artifact root)
-Resolved context path: {{context_path}} (empty means no extra context bundle)
-Resolved post mode: {{post_mode}}
-
-Artifact root semantics:
-- Resolve the durable artifact root with
-  `{{pack_root}}/assets/scripts/artifacts.py root --override "{{artifact_root}}"`.
-- Paths shown with a leading slash, such as
-  `/github/pulls/<owner>/<repo>/<number>/source.json`, are
-  artifact-root-relative, not filesystem-root absolute.
-- Resolve concrete files with
-  `{{pack_root}}/assets/scripts/artifacts.py path --override "{{artifact_root}}" --relative "/github/pulls/<owner>/<repo>/<number>/source.json" --mkdir-parents`.
-- Store absolute resolved artifact paths in bead metadata. Do not infer source
-  identity, workflow identity, readiness, or routing from artifact paths.
-
-Validate the PR URL with
-`{{pack_root}}/assets/scripts/github_api.py parse-url "{{github_pr_url}}" --kind pull`,
-reject shorthand inputs, then fetch the current PR source snapshot with
-`{{pack_root}}/assets/scripts/github_api.py pr-snapshot "{{github_pr_url}}"`.
-
-Write the returned snapshot JSON to
-artifact-root-relative path `/github/pulls/<owner>/<repo>/<number>/source.json`.
-Then create or refresh the canonical GitHub source bead using this v0 contract:
-
-- Source beads are non-runnable index/cache beads. Do not route the source bead,
-  assign it, depend on it, or use it as a readiness gate.
-- Lookup uses object identity only:
-  `bd list --metadata-field gc.kind=github_source --metadata-field gc.github.kind=pull --metadata-field gc.github.repo=<owner>/<repo> --metadata-field gc.github.number=<number> --status open,in_progress,closed --limit 1 --json`.
-- Write `source-metadata.json` with flat string metadata:
-  `gc.kind=github_source`, `gc.github.kind=pull`,
-  `gc.github.repo=<owner>/<repo>`, `gc.github.number=<number>`,
-  `gc.github.url=<canonical_url>`, `gc.github.title=<title>`,
-  `gc.github.state=<state>`, `gc.github.author=<author>`,
-  `gc.github.body_hash=<body_hash>`,
-  `gc.github.head_sha=<head_sha>`, `gc.github.head_ref=<head_ref>`,
-  `gc.github.head_repo=<head_repo>`, `gc.github.base_ref=<base_ref>`,
-  `gc.github.base_repo=<base_repo>`,
-  `gc.github.snapshot_path=<absolute source.json path>`,
-  `gc.github.updated_at=<updated_at>`.
-- If no bead exists, create it with
-  `bd create "GitHub PR source: <owner>/<repo>#<number>" --type task --labels gc.github-source,gc.github-pr --external-ref <canonical_url> --metadata @source-metadata.json`.
-- If a bead exists, refresh it with
-  `bd update <source-bead-id> --external-ref <canonical_url> --metadata @source-metadata.json`.
-
-Only `gc.github.head_sha` controls head-SHA-keyed PR review reuse.
-"""
+description_file = "../assets/workflows/github-pr-review/snapshot.md"
 
 [[steps]]
 id = "reuse-current-head"
 title = "Reuse current head-SHA review when present"
 needs = ["snapshot"]
 metadata = { "gc.run_target" = "gc.run-operator" }
-description = """
-Look for the current head-SHA review artifact directory:
-`/github/pulls/<owner>/<repo>/<number>/reviews/<head-sha>/`, resolved under
-the artifact root with `{{pack_root}}/assets/scripts/artifacts.py path
---override "{{artifact_root}}" --relative
-"/github/pulls/<owner>/<repo>/<number>/reviews/<head-sha>/" --directory`.
-
-If a validated review report/comment or waiting human gate already exists for
-the same repo, PR number, and head SHA, resume that attempt. If the stored
-sticky comment was deleted, create a replacement and update metadata.
-"""
+description_file = "../assets/workflows/github-pr-review/reuse-current-head.md"
 
 [[steps]]
 id = "run-review"
 title = "Run generic review"
 needs = ["reuse-current-head"]
 metadata = { "gc.run_target" = "gc.implementation-reviewer" }
-description = """
-Invoke the generic targetless `review` formula over the PR diff, branch, commit,
-or artifact subject for this head SHA. Pass through context path
-{{context_path}} when set.
-The adapter does not check out a mutation worktree, push commits, amend
-contributor branches, or create follow-up PRs.
-"""
+description_file = "../assets/workflows/github-pr-review/run-review.md"
 
 [[steps]]
 id = "render-comment"
 title = "Render sticky PR comment"
 needs = ["run-review"]
 metadata = { "gc.run_target" = "gc.run-operator" }
-description = """
-Validate the generic review verdict report and map it with
-`{{pack_root}}/assets/scripts/github_reports.py review-outcome`:
-`pass/none -> approve`, `fail/minor -> comment`, `fail/major -> request_changes`,
-and `fail/blocker -> block`. Render the normal PR comment with
-`{{pack_root}}/assets/scripts/github_reports.py render-review-comment`.
-The source PR URL is {{github_pr_url}}.
-"""
+description_file = "../assets/workflows/github-pr-review/render-comment.md"
 
 [[steps]]
 id = "human-gate-comment"
@@ -143,33 +73,18 @@ title = "Gate PR review comment"
 needs = ["render-comment"]
 condition = "{{post_mode}} == human_gate"
 metadata = { "gc.run_target" = "gc.run-operator" }
-description = """
-Send the rendered review report and comment to the human gate. The gate records
-decision and attachments only; this formula owns whether to post, revise, or
-stop after the gate result. Current post mode is {{post_mode}}.
-"""
+description_file = "../assets/workflows/github-pr-review/human-gate-comment.md"
 
 [[steps]]
 id = "post-comment"
 title = "Create or update sticky PR comment"
 needs = ["render-comment", "human-gate-comment"]
 metadata = { "gc.run_target" = "gc.run-operator" }
-description = """
-Create or update exactly one normal PR comment for this head SHA through
-`{{pack_root}}/assets/scripts/github_api.py comment-create "{{github_pr_url}}" --body-file <comment.md>` or
-`{{pack_root}}/assets/scripts/github_api.py comment-update`. Do not submit
-formal GitHub review events in v0.
-"""
+description_file = "../assets/workflows/github-pr-review/post-comment.md"
 
 [[steps]]
 id = "finalize"
 title = "Finalize PR review result"
 needs = ["post-comment"]
 metadata = { "gc.run_target" = "gc.run-operator" }
-description = """
-Write final run metadata containing source bead id, head SHA, review report
-path, rendered comment path, GitHub comment id/url, mapped outcome, launch input
-URL {{github_pr_url}}, artifact root {{artifact_root}}, context path
-{{context_path}}, post mode {{post_mode}}, and whether this run reused prior
-head-SHA output.
-"""
+description_file = "../assets/workflows/github-pr-review/finalize.md"

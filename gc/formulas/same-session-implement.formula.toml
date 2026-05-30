@@ -20,10 +20,7 @@ default = ""
 id = "shared-drain"
 title = "Run core shared drain"
 metadata = { "gc.run_target" = "gc.implementation-worker" }
-description = """
-Emit core `[steps.drain] context = "shared"` using do-work-item and
-`single_lane = true`. Pass context path {{context_path}} to shared item work.
-"""
+description_file = "../assets/workflows/same-session-implement/shared-drain.md"
 
 [steps.drain]
 context = "shared"

@@ -33,18 +33,18 @@ default = "human"
 id = "body"
 title = "Design review body scope"
 needs = ["design-review"]
-description = "Terminal latch for the design-review workflow."
+description_file = "../assets/workflows/design-review/body.md"
 metadata = { "gc.kind" = "scope", "gc.scope_name" = "design-review", "gc.scope_role" = "body" }
 
 [[steps]]
 id = "design-review"
 title = "Review design"
-description = "Review `{{design_doc}}` with context `{{context_files}}`, write artifacts under `{{artifact_dir}}`, and update the design until it is approved or blocked."
+description_file = "../assets/workflows/design-review/design-review.md"
 metadata = { "gc.scope_ref" = "body", "gc.scope_role" = "member", "gc.on_fail" = "abort_scope", "gc.run_target" = "gc.review-synthesizer" }
 
 [[steps]]
 id = "finalize"
 title = "Finalize design-review workflow"
 needs = ["body"]
-description = "Finalize the input convoy, write a terminal summary under `{{artifact_dir}}`, and notify `{{notify}}`."
+description_file = "../assets/workflows/design-review/finalize.md"
 metadata = { "gc.kind" = "cleanup", "gc.scope_ref" = "body", "gc.scope_role" = "teardown", "gc.run_target" = "gc.run-operator" }

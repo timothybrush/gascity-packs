@@ -26,130 +26,130 @@ default = "start"
 id = "body"
 title = "Bug report body scope"
 needs = ["bootstrap-run", "refresh-intake", "historical-baseline", "reported-build-repro", "main-repro", "code-path-audit", "coverage-audit", "related-refs-audit", "investigation-synthesis", "followup-evidence", "normalize-outcome", "verify-normalized-outcome", "approve-classification", "verify-classification-approval", "publish-classification", "dispatch-implementation"]
-description = "Terminal latch for the bug report investigation workflow."
+description_file = "../assets/workflows/bug-report-flow/body.md"
 metadata = { "gc.kind" = "scope", "gc.scope_name" = "bug-report-flow", "gc.scope_role" = "body" }
 
 [[steps]]
 id = "bootstrap-run"
 title = "Resolve report and adopt source bead"
-description = "Resolve report reference `{{report_ref}}` in run mode `{{run_mode}}`, validate prerequisites, and adopt or create the canonical source bead."
+description_file = "../assets/workflows/bug-report-flow/bootstrap-run.md"
 metadata = { "gc.scope_ref" = "body", "gc.scope_role" = "setup", "gc.on_fail" = "abort_scope", "gc.run_target" = "gc.run-operator" }
 
 [[steps]]
 id = "refresh-intake"
 title = "Refresh intake snapshot"
 needs = ["bootstrap-run"]
-description = "Refresh the issue snapshot and normalized run state."
+description_file = "../assets/workflows/bug-report-flow/refresh-intake.md"
 metadata = { "gc.scope_ref" = "body", "gc.scope_role" = "member", "gc.on_fail" = "abort_scope", "gc.run_target" = "gc.run-operator" }
 
 [[steps]]
 id = "historical-baseline"
 title = "Acquire historical baseline"
 needs = ["refresh-intake"]
-description = "Collect historical baseline evidence when the report identifies an affected build or version."
+description_file = "../assets/workflows/bug-report-flow/historical-baseline.md"
 metadata = { "gc.scope_ref" = "body", "gc.scope_role" = "member", "gc.on_fail" = "abort_scope", "gc.run_target" = "gc.issue-triager" }
 
 [[steps]]
 id = "reported-build-repro"
 title = "Reproduce reported build"
 needs = ["historical-baseline"]
-description = "Attempt bounded reproduction on the reported build or recorded baseline."
+description_file = "../assets/workflows/bug-report-flow/reported-build-repro.md"
 metadata = { "gc.scope_ref" = "body", "gc.scope_role" = "member", "gc.on_fail" = "abort_scope", "gc.run_target" = "gc.issue-triager" }
 
 [[steps]]
 id = "main-repro"
 title = "Reproduce current main"
 needs = ["refresh-intake"]
-description = "Attempt bounded reproduction on current main."
+description_file = "../assets/workflows/bug-report-flow/main-repro.md"
 metadata = { "gc.scope_ref" = "body", "gc.scope_role" = "member", "gc.on_fail" = "abort_scope", "gc.run_target" = "gc.issue-triager" }
 
 [[steps]]
 id = "code-path-audit"
 title = "Audit code path"
 needs = ["refresh-intake"]
-description = "Inspect the suspected code path and validate the bug premise."
+description_file = "../assets/workflows/bug-report-flow/code-path-audit.md"
 metadata = { "gc.scope_ref" = "body", "gc.scope_role" = "member", "gc.on_fail" = "abort_scope", "gc.run_target" = "gc.issue-triager" }
 
 [[steps]]
 id = "coverage-audit"
 title = "Audit coverage"
 needs = ["refresh-intake"]
-description = "Inspect current test coverage for the reported path."
+description_file = "../assets/workflows/bug-report-flow/coverage-audit.md"
 metadata = { "gc.scope_ref" = "body", "gc.scope_role" = "member", "gc.on_fail" = "abort_scope", "gc.run_target" = "gc.issue-triager" }
 
 [[steps]]
 id = "related-refs-audit"
 title = "Inspect related refs"
 needs = ["refresh-intake"]
-description = "Inspect related references only when they are relevant to classification."
+description_file = "../assets/workflows/bug-report-flow/related-refs-audit.md"
 metadata = { "gc.scope_ref" = "body", "gc.scope_role" = "member", "gc.on_fail" = "abort_scope", "gc.run_target" = "gc.issue-triager" }
 
 [[steps]]
 id = "investigation-synthesis"
 title = "Synthesize investigation"
 needs = ["historical-baseline", "reported-build-repro", "main-repro", "code-path-audit", "coverage-audit", "related-refs-audit"]
-description = "Synthesize evidence into a classification packet."
+description_file = "../assets/workflows/bug-report-flow/investigation-synthesis.md"
 metadata = { "gc.scope_ref" = "body", "gc.scope_role" = "member", "gc.on_fail" = "abort_scope", "gc.run_target" = "gc.issue-triager" }
 
 [[steps]]
 id = "followup-evidence"
 title = "Collect follow-up evidence"
 needs = ["investigation-synthesis"]
-description = "Perform one bounded follow-up evidence pass when the synthesis identifies a narrow gap."
+description_file = "../assets/workflows/bug-report-flow/followup-evidence.md"
 metadata = { "gc.scope_ref" = "body", "gc.scope_role" = "member", "gc.on_fail" = "abort_scope", "gc.run_target" = "gc.issue-triager" }
 
 [[steps]]
 id = "normalize-outcome"
 title = "Normalize outcome"
 needs = ["followup-evidence"]
-description = "Normalize the classification and selected next path."
+description_file = "../assets/workflows/bug-report-flow/normalize-outcome.md"
 metadata = { "gc.scope_ref" = "body", "gc.scope_role" = "member", "gc.on_fail" = "abort_scope", "gc.run_target" = "gc.issue-triager" }
 
 [[steps]]
 id = "verify-normalized-outcome"
 title = "Verify normalized outcome"
 needs = ["normalize-outcome"]
-description = "Verify outcome invariants before human approval."
+description_file = "../assets/workflows/bug-report-flow/verify-normalized-outcome.md"
 metadata = { "gc.scope_ref" = "body", "gc.scope_role" = "member", "gc.on_fail" = "abort_scope", "gc.run_target" = "gc.run-operator" }
 
 [[steps]]
 id = "approve-classification"
 title = "Approve classification"
 needs = ["verify-normalized-outcome"]
-description = "Ask for human approval of the classification and next path when policy requires it."
+description_file = "../assets/workflows/bug-report-flow/approve-classification.md"
 metadata = { "gc.scope_ref" = "body", "gc.scope_role" = "member", "gc.on_fail" = "abort_scope", "gc.run_target" = "gc.run-operator" }
 
 [[steps]]
 id = "verify-classification-approval"
 title = "Verify classification approval"
 needs = ["approve-classification"]
-description = "Verify the durable classification approval artifact."
+description_file = "../assets/workflows/bug-report-flow/verify-classification-approval.md"
 metadata = { "gc.scope_ref" = "body", "gc.scope_role" = "member", "gc.on_fail" = "abort_scope", "gc.run_target" = "gc.run-operator" }
 
 [[steps]]
 id = "publish-classification"
 title = "Publish classification"
 needs = ["verify-classification-approval"]
-description = "Publish approved public classification updates."
+description_file = "../assets/workflows/bug-report-flow/publish-classification.md"
 metadata = { "gc.scope_ref" = "body", "gc.scope_role" = "member", "gc.on_fail" = "abort_scope", "gc.run_target" = "gc.run-operator" }
 
 [[steps]]
 id = "dispatch-implementation"
 title = "Dispatch implementation when needed"
 needs = ["publish-classification"]
-description = "Dispatch the implementation workflow only when the approved classification requires code or test changes."
+description_file = "../assets/workflows/bug-report-flow/dispatch-implementation.md"
 metadata = { "gc.scope_ref" = "body", "gc.scope_role" = "member", "gc.on_fail" = "abort_scope", "gc.run_target" = "gc.run-operator" }
 
 [[steps]]
 id = "verify-run-state"
 title = "Verify terminal run state"
 needs = ["body"]
-description = "Verify terminal local run state."
+description_file = "../assets/workflows/bug-report-flow/verify-run-state.md"
 metadata = { "gc.kind" = "cleanup", "gc.scope_ref" = "body", "gc.scope_role" = "teardown", "gc.run_target" = "gc.run-operator" }
 
 [[steps]]
 id = "cleanup-run-state"
 title = "Clean up run state"
 needs = ["body"]
-description = "Finalize run state and optionally purge local artifacts."
+description_file = "../assets/workflows/bug-report-flow/cleanup-run-state.md"
 metadata = { "gc.kind" = "cleanup", "gc.scope_ref" = "body", "gc.scope_role" = "teardown", "gc.run_target" = "gc.run-operator" }

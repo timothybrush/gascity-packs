@@ -115,8 +115,28 @@ def effective_formula_text(root: pathlib.Path, name: str) -> str:
     chunks = []
     for parent in data.get("extends", []):
         chunks.append(effective_formula_text(root, parent))
-    chunks.append((root / "formulas" / f"{name}.formula.toml").read_text(encoding="utf-8"))
+    formula_path = root / "formulas" / f"{name}.formula.toml"
+    chunks.append(formula_path.read_text(encoding="utf-8"))
+    for node in formula_nodes(data):
+        description_file = node.get("description_file")
+        if description_file:
+            chunks.append((formula_path.parent / description_file).resolve().read_text(encoding="utf-8"))
     return "\n".join(chunks)
+
+
+def formula_nodes(data: dict) -> list[dict]:
+    nodes = list(data.get("steps", []))
+    nodes.extend(data.get("template", []))
+    for template in data.get("template", []):
+        nodes.extend(template.get("children", []))
+    return nodes
+
+
+def node_description(root: pathlib.Path, node: dict) -> str:
+    description_file = node.get("description_file")
+    if description_file:
+        return (root / "formulas" / description_file).resolve().read_text(encoding="utf-8")
+    return node["description"]
 
 
 class FormulaAssetTests(unittest.TestCase):
@@ -207,6 +227,21 @@ class FormulaAssetTests(unittest.TestCase):
 
         self.assertEqual(catalog_names, CATALOG_FORMULAS)
 
+    def test_formula_node_descriptions_delegate_to_shadowable_assets(self) -> None:
+        root = pathlib.Path(__file__).resolve().parents[1]
+        for formula_path in sorted((root / "formulas").glob("*.formula.toml")):
+            formula = formula_path.name.removesuffix(".formula.toml")
+            data = tomllib.loads(formula_path.read_text(encoding="utf-8"))
+            for node in formula_nodes(data):
+                with self.subTest(formula=formula, node=node["id"]):
+                    self.assertNotIn("description", node)
+                    description_file = node.get("description_file")
+                    self.assertEqual(
+                        description_file,
+                        f"../assets/workflows/{formula}/{node['id']}.md",
+                    )
+                    self.assertTrue((formula_path.parent / description_file).resolve().is_file())
+
     def test_implement_formula_uses_core_drain_steps(self) -> None:
         root = pathlib.Path(__file__).resolve().parents[1]
         data = tomllib.loads((root / "formulas" / "implement.formula.toml").read_text(encoding="utf-8"))
@@ -235,7 +270,7 @@ class FormulaAssetTests(unittest.TestCase):
         self.assertEqual(same["drain"]["on_item_failure"], "skip_remaining")
         self.assertEqual(data["steps"][3]["metadata"]["gc.run_target"], "gc.run-operator")
         self.assertEqual(data["steps"][4]["metadata"]["gc.run_target"], "gc.run-operator")
-        wait = data["steps"][3]["description"]
+        wait = node_description(root, data["steps"][3])
         for fragment in (
             "Wait only on the core drain control bead",
             "gc.drain_manifest.v1",
@@ -262,7 +297,7 @@ class FormulaAssetTests(unittest.TestCase):
             "Do not run implementation or test-fix loops",
         ):
             with self.subTest(fragment=fragment):
-                self.assertIn(fragment, prepare["description"])
+                self.assertIn(fragment, node_description(root, prepare))
 
     def test_item_implementation_formulas_route_role_agents(self) -> None:
         root = pathlib.Path(__file__).resolve().parents[1]
@@ -284,7 +319,7 @@ class FormulaAssetTests(unittest.TestCase):
         do_work = tomllib.loads((root / "formulas" / "do-work.formula.toml").read_text(encoding="utf-8"))
         steps = {step["id"]: step for step in do_work["steps"]}
 
-        prepare = steps["prepare-worktree"]["description"]
+        prepare = node_description(root, steps["prepare-worktree"])
         for fragment in (
             "current step bead metadata",
             "gc.root_bead_id",
@@ -299,7 +334,7 @@ class FormulaAssetTests(unittest.TestCase):
             with self.subTest(step="prepare-worktree", fragment=fragment):
                 self.assertIn(fragment, prepare)
 
-        implement = steps["implement"]["description"]
+        implement = node_description(root, steps["implement"])
         for fragment in (
             "Read `work_dir` from the source anchor",
             "cd \"$WORKTREE\"",
@@ -310,7 +345,7 @@ class FormulaAssetTests(unittest.TestCase):
             with self.subTest(step="implement", fragment=fragment):
                 self.assertIn(fragment, implement)
 
-        close_source = steps["close-source-anchor"]["description"]
+        close_source = node_description(root, steps["close-source-anchor"])
         for fragment in (
             "Read `work_dir` from the source anchor",
             "close only `<source-anchor-id>`",
@@ -493,14 +528,14 @@ class FormulaAssetTests(unittest.TestCase):
 
         gate = next(step for step in data["steps"] if step["id"] == "human-gate-sensitive-output")
         self.assertNotIn("condition", gate)
-        self.assertIn("gc.github.triage_priority", gate["description"])
-        self.assertIn("no-op gate", gate["description"])
+        self.assertIn("gc.github.triage_priority", node_description(root, gate))
+        self.assertIn("no-op gate", node_description(root, gate))
 
     def test_all_declared_formula_vars_are_rendered_into_graph_text(self) -> None:
         root = pathlib.Path(__file__).resolve().parents[1]
         for path in sorted((root / "formulas").glob("*.formula.toml")):
             data = tomllib.loads(path.read_text(encoding="utf-8"))
-            text = path.read_text(encoding="utf-8")
+            text = effective_formula_text(root, path.name.removesuffix(".formula.toml"))
             for var_name in data.get("vars", {}):
                 with self.subTest(formula=path.name, var=var_name):
                     if data.get("type") == "expansion":

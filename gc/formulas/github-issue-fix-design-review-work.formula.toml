@@ -20,38 +20,13 @@ default = "interactive"
 id = "{target}.setup-design-review"
 title = "Prepare issue-fix design review"
 metadata = { "gc.run_target" = "gc.run-operator" }
-description = """
-Recover context from bead metadata, not from a side-channel context file:
-
-1. Read this step bead and the workflow root bead through `bd show --json`.
-2. Read `gc.github.design_path` and `gc.github.requirements_path` from the
-   workflow root or completed design/requirements steps.
-3. Validate that `design.md` exists. The design may be `draft` or `approved`
-   on entry; this review step owns final approval for downstream decomposition.
-4. Derive the issue-fix run directory as `dirname(requirements_path)`.
-5. Set `REVIEW_DIR=<run-dir>/design-review`, create it, and copy this pack's
-   scripts into the rig-local script cache:
-   `rm -rf .gc/scripts && mkdir -p .gc && cp -R {{pack_root}}/assets/scripts .gc/scripts`.
-6. Verify `.gc/scripts/checks/design-review-approved.sh` is executable.
-
-Write `<REVIEW_DIR>/initial-design.md` and update workflow root metadata:
-- `gc.github.design_review_dir=<absolute REVIEW_DIR>`
-- `gc.github.design_review_mode={mode}`
-- `gc.github.design_review_status=running`
-
-Close with `gc.outcome=pass`. Do not edit source files.
-"""
+description_file = "../assets/workflows/github-issue-fix-design-review-work/{target}.setup-design-review.md"
 
 [[template]]
 id = "{target}.review-loop"
 title = "Review and refine design until approved"
 needs = ["{target}.setup-design-review"]
-description = """
-Retry-loop container for a small design-review loop. Each attempt runs two focused
-review prompts against the current `design.md`, synthesizes their findings,
-applies required changes, and stops only when the apply step records
-`design_review.verdict=done`.
-"""
+description_file = "../assets/workflows/github-issue-fix-design-review-work/{target}.review-loop.md"
 metadata = { "gc.run_target" = "gc.run-operator" }
 
 [template.ralph]
@@ -65,101 +40,27 @@ timeout = "10m"
 [[template.children]]
 id = "{target}.implementation-review"
 title = "Review design: implementation realism"
-description = """
-Read workflow root metadata, the current `gc.github.design_path`,
-requirements, triage report, and relevant code. Derive the current attempt from
-this bead metadata (`gc.attempt`) and write artifacts under
-`<gc.github.design_review_dir>/attempt-<attempt>/`.
-
-Review only implementation realism:
-
-- Does the proposed change touch the right modules?
-- Are APIs, state, and side effects clear enough for build agents?
-- Are hidden compatibility or layering issues missing?
-- Is the design smaller than necessary or broader than approved requirements?
-
-Write `implementation-review.md` with:
-- `## Verdict` containing `approve` or `iterate`
-- `## Findings`
-- `## Required Changes`
-
-Close with `gc.outcome=pass` and `design_review.output_path` pointing at the
-Markdown artifact. `iterate` requires concrete findings.
-"""
+description_file = "../assets/workflows/github-issue-fix-design-review-work/{target}.implementation-review.md"
 metadata = { "gc.run_target" = "gc.design-implementation-reviewer" }
 
 [[template.children]]
 id = "{target}.testing-risk-review"
 title = "Review design: tests and risk"
-description = """
-Read workflow root metadata, the current `gc.github.design_path`,
-requirements, triage report, and relevant tests. Derive the current attempt
-from this bead metadata (`gc.attempt`) and write artifacts under
-`<gc.github.design_review_dir>/attempt-<attempt>/`.
-
-Review only testing and risk:
-
-- Would the tests catch the reported regression?
-- Are fake/stub boundaries explicit enough?
-- Are edge cases and negative paths represented?
-- Are rollout and observability notes sufficient for this change?
-
-Write `testing-risk-review.md` with:
-- `## Verdict` containing `approve` or `iterate`
-- `## Findings`
-- `## Required Changes`
-
-Close with `gc.outcome=pass` and `design_review.output_path` pointing at the
-Markdown artifact. `iterate` requires concrete findings.
-"""
+description_file = "../assets/workflows/github-issue-fix-design-review-work/{target}.testing-risk-review.md"
 metadata = { "gc.run_target" = "gc.design-test-risk-reviewer" }
 
 [[template.children]]
 id = "{target}.synthesize-review"
 title = "Synthesize design reviews"
 needs = ["{target}.implementation-review", "{target}.testing-risk-review"]
-description = """
-Read both review artifacts for the current attempt. Produce one synthesis at
-`<gc.github.design_review_dir>/attempt-<attempt>/synthesis.md` with:
-
-- overall verdict: `approve` only if both reviews approve, otherwise `iterate`
-- required changes, ordered by implementation risk
-- optional improvements that must not block approval
-- disagreements and your resolution
-
-Stamp this bead with `design_review.global_verdict=approve|iterate`,
-`design_review.output_path=<synthesis path>`, and `gc.outcome=pass`.
-"""
+description_file = "../assets/workflows/github-issue-fix-design-review-work/{target}.synthesize-review.md"
 metadata = { "gc.run_target" = "gc.review-synthesizer" }
 
 [[template.children]]
 id = "{target}.apply-design-review-findings"
 title = "Apply design-review findings"
 needs = ["{target}.synthesize-review"]
-description = """
-Read the current attempt synthesis and update `gc.github.design_path` in place.
-
-If the global verdict is `approve`:
-- set design front matter `status: approved`
-- add or refresh a short accepted-risks note when relevant
-- stamp root metadata `gc.github.design_review_status=approved`
-- close this bead with `design_review.verdict=done`
-
-If the global verdict is `iterate`:
-- apply all required changes to `design.md`
-- keep front matter `status: draft`
-- stamp root metadata `gc.github.design_review_status=iterating`
-- close this bead with `design_review.verdict=iterate`
-
-For every attempt, write:
-- `design-after.md`
-- `design.diff`
-- `apply-summary.md`
-
-Close with `gc.outcome=pass`, `design_review.verdict=done|iterate`,
-`design_review.output_path=<apply-summary path>`, and
-`gc.continuation_group=design-review-fixes`. Do not edit source files.
-"""
+description_file = "../assets/workflows/github-issue-fix-design-review-work/{target}.apply-design-review-findings.md"
 metadata = { "gc.run_target" = "gc.review-synthesizer", "gc.continuation_group" = "design-review-fixes" }
 
 [[template]]
@@ -167,19 +68,4 @@ id = "{target}"
 title = "Finalize approved issue-fix design review"
 needs = ["{target}.review-loop"]
 metadata = { "gc.run_target" = "gc.run-operator" }
-description = """
-Validate that `gc.github.design_path` exists and its front matter has
-`status: approved`. If not, fail this step with `gc.outcome=fail` and
-`gc.failure_class=hard`.
-
-On success, update this step and the workflow root with:
-- `gc.github.design_path=<absolute design.md path>`
-- `gc.github.design_status=approved`
-- `gc.github.design_review_status=approved`
-- `gc.github.design_review_dir=<absolute review dir>`
-- `gc.outcome=pass`
-
-Close this sink step with `gc.outcome=pass`. Downstream `decompose` must not
-need to know whether the review came from the base two-lane loop or a local
-override.
-"""
+description_file = "../assets/workflows/github-issue-fix-design-review-work/{target}.md"

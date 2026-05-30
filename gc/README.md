@@ -80,6 +80,76 @@ Default formula routes use these qualified targets: `gc.run-operator`,
 `gc.implementation-worker`, `gc.gap-analyst`, `gc.implementation-reviewer`,
 and `gc.publisher`.
 
+## Customizing Workflow Behavior
+
+There are two intended customization levels.
+
+For the basic path, shadow a step asset with the same relative path in your
+city or local pack import. Formula step bodies live under
+`assets/workflows/<formula>/<step-id>.md`; Gas City resolves these paths through
+the normal import/layer search path. To customize GitHub issue triage without
+changing the workflow graph, add this file in your city assets:
+
+```text
+assets/workflows/github-issue-triage-base/write-triage-report.md
+```
+
+A real local override might add instructions like:
+
+```markdown
+Apply our repository triage policy before writing the report:
+
+- If the issue touches `internal/api/` or generated API schema files, read
+  `engdocs/architecture/api-control-plane.md` and
+  `engdocs/contributors/huma-usage.md`.
+- Treat missing reproduction evidence as `needs-info` unless the report
+  includes a failing test, stack trace, or linked CI artifact.
+- Label user-visible regressions as `p1` only when current `origin/main` is
+  affected; historical release-only reports are `p2` unless data loss is
+  plausible.
+- Include exact commands run, relevant file paths, and any GitHub labels that
+  should be applied.
+```
+
+For advanced customization, override the formula step whose ID matches the
+extension point you want to replace. Copy the bundled formula into your local
+pack or city formula layer, preserve the vars and metadata you still need, and
+replace only the step block. For example, to replace the standard local review
+with an N-wide review plus synthesis pipeline, override `build-run` step
+`review-loop` or the lower-level `review` step `write-report` to expand to your
+own review quorum:
+
+```toml
+[[steps]]
+id = "review-loop"
+title = "Run local review quorum"
+needs = ["gap-loop"]
+description_file = "../assets/workflows/build-run/review-loop.md"
+expand = "company-review-n-wide"
+metadata = { "gc.run_target" = "gc.review-synthesizer" }
+```
+
+Keep sink contracts stable when downstream steps depend on them. For review and
+gap-analysis, write the same `schema: gc.verdict-report.v1` report with
+`verdict: pass|fail`; for GitHub adapter workflows, preserve the documented
+`gc.github.*` metadata on the workflow root bead.
+
+Common formula step IDs:
+
+| Workflow | Best basic asset | Best advanced step IDs |
+| --- | --- | --- |
+| Design review | `assets/workflows/design-review/design-review.md` | `design-review`, `finalize` |
+| Plan and decompose issue fixes | `assets/workflows/github-issue-fix-base/generate-requirements.md` | `generate-requirements`, `design`, `design-review`, `decompose` |
+| Build implementation convoys | `assets/workflows/build-run/implement-initial.md` | `implement-initial`, `gap-loop`, `review-loop`, `publish` |
+| Direct implementation | `assets/workflows/implement/prepare.md` | `prepare`, `drain-separate`, `drain-same-session`, `wait-for-drain`, `summarize` |
+| Per-item implementation | `assets/workflows/do-work/implement.md` | `prepare-worktree`, `implement`, `close-source-anchor` |
+| Gap analysis | `assets/workflows/gap-analysis/write-report.md` | `validate-context`, `write-report` |
+| Review | `assets/workflows/review/write-report.md` | `validate-context`, `write-report` |
+| GitHub issue triage | `assets/workflows/github-issue-triage-base/write-triage-report.md` | `snapshot`, `write-triage-report`, `human-gate-sensitive-output`, `post-comment`, `finalize` |
+| GitHub PR review | `assets/workflows/github-pr-review/run-review.md` | `snapshot`, `run-review`, `human-gate-comment`, `post-comment`, `finalize` |
+| Bug report flow | `assets/workflows/bug-report-flow/investigation-synthesis.md` | `reported-build-repro`, `main-repro`, `investigation-synthesis`, `dispatch-implementation` |
+| Bug hunt | `assets/workflows/bug-hunt/hunter-fanout.md` | `prepare-hunters`, `hunter-fanout`, `synthesize-findings`, `finalize` |
+
 By default artifacts go under the target rig:
 
 ```text

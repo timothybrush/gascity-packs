@@ -30,32 +30,32 @@ default = ""
 id = "body"
 title = "Post-merge review body scope"
 needs = ["setup-landed-review", "review-loop", "finalize", "cleanup-worktree"]
-description = "Terminal latch for the post-merge PR review workflow."
+description_file = "../assets/workflows/post-merge-pr-review/body.md"
 metadata = { "gc.kind" = "scope", "gc.scope_name" = "pr-post-merge-review", "gc.scope_role" = "body" }
 
 [[steps]]
 id = "setup-landed-review"
 title = "Prepare landed review context"
-description = "Prepare review context for merged PR `{{pr_url}}` in `{{repo_slug}}` over range `{{review_base_sha}}..{{review_head_sha}}`."
+description_file = "../assets/workflows/post-merge-pr-review/setup-landed-review.md"
 metadata = { "gc.scope_ref" = "body", "gc.scope_role" = "setup", "gc.on_fail" = "abort_scope", "gc.run_target" = "gc.run-operator" }
 
 [[steps]]
 id = "review-loop"
 title = "Review landed changes"
 needs = ["setup-landed-review"]
-description = "Review the landed change and create remediation work only for actionable findings."
+description_file = "../assets/workflows/post-merge-pr-review/review-loop.md"
 metadata = { "gc.scope_ref" = "body", "gc.scope_role" = "member", "gc.on_fail" = "abort_scope", "gc.run_target" = "gc.review-synthesizer" }
 
 [[steps]]
 id = "finalize"
 title = "Publish landed review result"
 needs = ["review-loop"]
-description = "Post the landed review result or hand a remediation PR to the merge queue."
+description_file = "../assets/workflows/post-merge-pr-review/finalize.md"
 metadata = { "gc.scope_ref" = "body", "gc.scope_role" = "member", "gc.on_fail" = "abort_scope", "gc.run_target" = "gc.publisher" }
 
 [[steps]]
 id = "cleanup-worktree"
 title = "Clean up landed review worktree"
 needs = ["finalize"]
-description = "Clean up temporary refs and worktree resources after the workflow reaches a terminal state."
+description_file = "../assets/workflows/post-merge-pr-review/cleanup-worktree.md"
 metadata = { "gc.kind" = "cleanup", "gc.scope_ref" = "body", "gc.scope_role" = "teardown", "gc.run_target" = "gc.run-operator" }

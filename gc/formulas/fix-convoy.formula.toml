@@ -24,28 +24,18 @@ default = ""
 id = "synthesize-fix-plan"
 title = "Synthesize fix convoy payload"
 metadata = { "gc.run_target" = "gc.review-synthesizer" }
-description = """
-Convert findings from report path {{report_path}} into a convoy payload or
-explicit cannot-fix records. Include context path {{context_path}} when set. Do
-not create beads before validation passes.
-"""
+description_file = "../assets/workflows/fix-convoy/synthesize-fix-plan.md"
 
 [[steps]]
 id = "validate-fix-plan"
 title = "Validate generated fix payload"
 needs = ["synthesize-fix-plan"]
 metadata = { "gc.run_target" = "gc.run-operator" }
-description = """
-Validate convoys, beads, files ownership, metadata namespaces, context path
-{{context_path}}, verification, and dependency graph.
-"""
+description_file = "../assets/workflows/fix-convoy/validate-fix-plan.md"
 
 [[steps]]
 id = "create-fix-convoy"
 title = "Create fix convoy"
 needs = ["validate-fix-plan"]
 metadata = { "gc.run_target" = "gc.run-operator" }
-description = """
-Create or resume the deterministic fix convoy by run id, loop kind, iteration,
-report hash for {{report_path}}, finding hash, and original convoy id.
-"""
+description_file = "../assets/workflows/fix-convoy/create-fix-convoy.md"

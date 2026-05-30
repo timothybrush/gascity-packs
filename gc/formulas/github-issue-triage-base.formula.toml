@@ -41,202 +41,46 @@ default = ""
 id = "snapshot"
 title = "Snapshot GitHub issue"
 metadata = { "gc.run_target" = "gc.run-operator" }
-description = """
-Resolved GitHub issue URL: {{github_issue_url}}
-Resolved artifact root override: {{artifact_root}} (empty means use the rig artifact root)
-Resolved post mode: {{post_mode}}
-
-Artifact root semantics:
-- Resolve the durable artifact root with
-  `{{pack_root}}/assets/scripts/artifacts.py root --override "{{artifact_root}}"`.
-- Paths shown with a leading slash, such as
-  `/github/issues/<owner>/<repo>/<number>/source.json`, are
-  artifact-root-relative, not filesystem-root absolute.
-- Resolve concrete files with
-  `{{pack_root}}/assets/scripts/artifacts.py path --override "{{artifact_root}}" --relative "/github/issues/<owner>/<repo>/<number>/source.json" --mkdir-parents`.
-- Store absolute resolved artifact paths in bead metadata. Do not infer source
-  identity, workflow identity, readiness, or routing from artifact paths.
-
-Validate the issue URL with
-`{{pack_root}}/assets/scripts/github_api.py parse-url "{{github_issue_url}}" --kind issue`,
-reject shorthand inputs, then fetch the current source snapshot with
-`{{pack_root}}/assets/scripts/github_api.py issue-snapshot "{{github_issue_url}}"`.
-
-Write the returned snapshot JSON to
-artifact-root-relative path `/github/issues/<owner>/<repo>/<number>/source.json`.
-Then create or refresh the canonical GitHub source bead using this v0 contract:
-
-- Source beads are non-runnable index/cache beads. Do not route the source bead,
-  assign it, depend on it, or use it as a readiness gate.
-- Lookup uses object identity only:
-  `bd list --metadata-field gc.kind=github_source --metadata-field gc.github.kind=issue --metadata-field gc.github.repo=<owner>/<repo> --metadata-field gc.github.number=<number> --status open,in_progress,closed --limit 1 --json`.
-- Write `source-metadata.json` with flat string metadata:
-  `gc.kind=github_source`, `gc.github.kind=issue`,
-  `gc.github.repo=<owner>/<repo>`, `gc.github.number=<number>`,
-  `gc.github.url=<canonical_url>`, `gc.github.title=<title>`,
-  `gc.github.state=<state>`, `gc.github.author=<author>`,
-  `gc.github.labels=<comma-separated labels>`,
-  `gc.github.body_hash=<body_hash>`,
-  `gc.github.snapshot_path=<absolute source.json path>`,
-  `gc.github.updated_at=<updated_at>`.
-- If no bead exists, create it with
-  `bd create "GitHub issue source: <owner>/<repo>#<number>" --type task --labels gc.github-source,gc.github-issue --external-ref <canonical_url> --metadata @source-metadata.json`.
-- If a bead exists, refresh it with
-  `bd update <source-bead-id> --external-ref <canonical_url> --metadata @source-metadata.json`.
-
-Then stamp workflow root metadata as the context handoff index for downstream
-steps. Do not write a separate triage context file; bead metadata is the small
-stable index, and artifact files hold large payloads.
-
-- Read the current step bead with `bd show <current-step-bead-id> --json` and
-  take `gc.root_bead_id`; hard-fail if it is missing.
-- Resolve the current triage directory with
-  `{{pack_root}}/assets/scripts/artifacts.py path --override "{{artifact_root}}" --relative "/github/issues/<owner>/<repo>/<number>/triage/<body-hash>/" --directory`.
-- Update the workflow root metadata with:
-  `bd update <root-bead-id> --set-metadata gc.github.source_bead_id=<source-bead-id> --set-metadata gc.github.kind=issue --set-metadata gc.github.repo=<owner>/<repo> --set-metadata gc.github.number=<number> --set-metadata gc.github.url=<canonical_url> --set-metadata gc.github.body_hash=<body_hash> --set-metadata gc.github.snapshot_path=<absolute source.json path> --set-metadata gc.github.triage_dir=<absolute triage directory> --set-metadata gc.github.artifact_root=<absolute artifact root> --set-metadata gc.github.post_mode={{post_mode}}`.
-
-Do not use title, label, assignee, or state changes to invalidate triage; only
-`gc.github.body_hash` controls body-hash-keyed triage reuse.
-"""
+description_file = "../assets/workflows/github-issue-triage-base/snapshot.md"
 
 [[steps]]
 id = "reuse-current-body-hash"
 title = "Reuse current body-hash triage when present"
 needs = ["snapshot"]
 metadata = { "gc.run_target" = "gc.run-operator" }
-description = """
-Read the current step bead metadata, get `gc.root_bead_id`, then read
-workflow root metadata with `bd show <root-bead-id> --json`. Use
-`gc.github.repo`, `gc.github.number`, `gc.github.body_hash`,
-`gc.github.snapshot_path`, and `gc.github.triage_dir` as the context index.
-If any required key is missing, hard-fail and report that the snapshot handoff
-metadata is incomplete.
-
-If a validated `triage-report.md` and current comment metadata already exist
-for the same repo, issue number, and body hash, return that run after refreshing
-source metadata. If the stored comment was deleted, create a replacement from
-the existing rendered comment and update workflow root metadata.
-"""
+description_file = "../assets/workflows/github-issue-triage-base/reuse-current-body-hash.md"
 
 [[steps]]
 id = "write-triage-report"
 title = "Write triage report"
 needs = ["reuse-current-body-hash"]
 metadata = { "gc.run_target" = "gc.issue-triager" }
-description = """
-Use GitHub issue URL {{github_issue_url}} as the source issue for all triage
-work in this step.
-
-Load context from bead metadata before investigating:
-
-- Read the current step bead metadata, get `gc.root_bead_id`, then read
-  workflow root metadata with `bd show <root-bead-id> --json`.
-- Required workflow root metadata keys are `gc.github.source_bead_id`,
-  `gc.github.repo`, `gc.github.number`, `gc.github.body_hash`,
-  `gc.github.snapshot_path`, and `gc.github.triage_dir`.
-- Read `gc.github.snapshot_path` for the issue title, body, labels, author,
-  timestamps, and canonical URL. Do not refetch the issue unless the snapshot
-  file is missing or invalid.
-- Write `triage-report.md` under `gc.github.triage_dir`.
-
-Behavior customization:
-
-- Optional rubric/prompt override path: {{triage_rubric_path}}.
-- If this value is non-empty, read that Markdown file before deciding the
-  verdict and writing the analysis body. Treat it as a user-supplied rubric or
-  skeleton for report behavior, not the metadata protocol.
-- The rubric may customize investigation strategy, project-specific label or
-  priority semantics, issue-kind policy, public explanation style, and the
-  human-readable report body skeleton.
-- The rubric must not override workflow metadata handoff, artifact paths,
-  report schema `gc.github-issue-triage-report.v1`, validator rules, security
-  or p0 human-gate behavior, comment marker requirements, or the ban on
-  implementation convoys, commits, pushes, PRs, and source-branch mutation.
-  If the rubric conflicts with those base protocol rules, follow this formula
-  and note the conflict in the report.
-- If the path is empty, use the base rubric below.
-
-Investigate the issue and optional repro evidence. Write the report with schema
-`gc.github-issue-triage-report.v1`, then validate it with
-`{{pack_root}}/assets/scripts/github_reports.py validate-triage --repo <gc.github.repo> --issue-number <gc.github.number> --body-hash <gc.github.body_hash>`.
-
-The YAML front matter is only the machine contract. Below it, write a useful
-human-readable analysis body with at least:
-- `## Summary`: what you found and why the verdict follows.
-- `## Evidence`: concrete source/test/runtime evidence, including commands,
-  files, or artifacts checked.
-- `## Recommendation`: the next action and any residual risk.
-
-Allowed verdicts are `reproduced`, `not_reproduced`, `needs_info`, `not_a_bug`,
-`duplicate`, and `security_sensitive`. Allowed next actions are bound to the
-verdict by the validator. Reproduction work may write logs, repro scripts, and
-patch evidence under the triage artifact directory only.
-
-After validation, update the workflow root metadata with the report result:
-`bd update <root-bead-id> --set-metadata gc.github.triage_report_path=<absolute triage-report.md path> --set-metadata gc.github.triage_verdict=<verdict> --set-metadata gc.github.triage_priority=<priority> --set-metadata gc.github.triage_recommended_next_action=<recommended_next_action>`.
-"""
+description_file = "../assets/workflows/github-issue-triage-base/write-triage-report.md"
 
 [[steps]]
 id = "render-comment"
 title = "Render triage comment"
 needs = ["write-triage-report"]
 metadata = { "gc.run_target" = "gc.run-operator" }
-description = """
-Read workflow root metadata from `bd show <root-bead-id> --json`. Render one
-body-hash-keyed public comment from `gc.github.triage_report_path` to
-`<gc.github.triage_dir>/comment.md`. The comment must include a durable
-workflow marker for the repo, issue number, and body hash. Use
-`{{pack_root}}/assets/scripts/github_reports.py render-triage-comment` so the
-structured front-matter fields are followed by the triage report analysis body
-for human and future-agent readers. For `security_sensitive` or `priority: p0`,
-render only safe public summary text until the human gate approves the final
-comment body. Update workflow root metadata with
-`gc.github.comment_path=<absolute comment.md path>`. The source issue URL is
-{{github_issue_url}}.
-"""
+description_file = "../assets/workflows/github-issue-triage-base/render-comment.md"
 
 [[steps]]
 id = "human-gate-sensitive-output"
 title = "Gate sensitive or forced-human output"
 needs = ["render-comment"]
 metadata = { "gc.run_target" = "gc.run-operator" }
-description = """
-Read workflow root metadata, including `gc.github.post_mode`,
-`gc.github.triage_priority`, and `gc.github.triage_verdict`.
-
-If `post_mode=human_gate`, priority is `p0`, or verdict is
-`security_sensitive`, send the rendered triage report and proposed comment to
-the human gate and record the decision in workflow root metadata. If none of
-those conditions applies, close this step as a no-op gate with metadata
-`gc.github.public_comment_gate=not_required`.
-
-This gate intentionally evaluates runtime triage metadata in the step body
-rather than a static formula condition.
-"""
+description_file = "../assets/workflows/github-issue-triage-base/human-gate-sensitive-output.md"
 
 [[steps]]
 id = "post-comment"
 title = "Create or update triage comment"
 needs = ["render-comment", "human-gate-sensitive-output"]
 metadata = { "gc.run_target" = "gc.run-operator" }
-description = """
-Read `gc.github.comment_path` and any existing comment metadata from workflow
-root metadata. Create or update the body-hash-keyed issue comment through
-`{{pack_root}}/assets/scripts/github_api.py comment-create "{{github_issue_url}}" --body-file <gc.github.comment_path>` or
-`{{pack_root}}/assets/scripts/github_api.py comment-update`. Update workflow
-root metadata with the GitHub comment id and URL. Do not call `gh` directly
-except to diagnose a wrapper failure.
-"""
+description_file = "../assets/workflows/github-issue-triage-base/post-comment.md"
 
 [[steps]]
 id = "finalize"
 title = "Finalize triage result"
 needs = ["post-comment"]
 metadata = { "gc.run_target" = "gc.run-operator" }
-description = """
-Read workflow root metadata and write final run metadata containing the source
-bead id, body hash, triage report path, rendered comment path, GitHub comment
-id/url, verdict, priority, recommended next action, launch input URL
-{{github_issue_url}}, artifact root {{artifact_root}}, post mode {{post_mode}},
-and whether this run reused prior body-hash output.
-"""
+description_file = "../assets/workflows/github-issue-triage-base/finalize.md"

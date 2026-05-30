@@ -1,0 +1,3 @@
+
+Emit core `[steps.drain] context = "shared"` using do-work-item and
+`single_lane = true`. Pass context path {{context_path}} to shared item work.

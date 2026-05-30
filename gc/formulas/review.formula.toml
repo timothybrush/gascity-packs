@@ -33,18 +33,11 @@ required = true
 id = "validate-context"
 title = "Validate report context"
 metadata = { "gc.run_target" = "gc.run-operator" }
-description = """
-Validate optional context bundle {{context_path}} and subject path
-{{subject_path}}. This formula is report-only and must not mutate beads,
-branches, or source files.
-"""
+description_file = "../assets/workflows/review/validate-context.md"
 
 [[steps]]
 id = "write-report"
 title = "Write review report"
 needs = ["validate-context"]
 metadata = { "gc.run_target" = "gc.implementation-reviewer" }
-description = """
-Write the review verdict report to {{report_path}} with pass/fail, findings,
-missing evidence, and recommended fixes for subject {{subject_path}}.
-"""
+description_file = "../assets/workflows/review/write-report.md"

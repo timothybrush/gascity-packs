@@ -29,32 +29,32 @@ required = true
 id = "body"
 title = "Bug hunt body scope"
 needs = ["prepare-hunters", "hunter-fanout", "synthesize-findings", "finalize"]
-description = "Terminal latch for the bug-hunt workflow."
+description_file = "../assets/workflows/bug-hunt/body.md"
 metadata = { "gc.kind" = "scope", "gc.scope_name" = "bug-hunt", "gc.scope_role" = "body" }
 
 [[steps]]
 id = "prepare-hunters"
 title = "Prepare bug-hunt assignments"
-description = "Prepare durable attempt artifacts under `{{artifact_dir}}` and hunter assignments for parent `{{parent}}` over scopes `{{scopes}}`."
+description_file = "../assets/workflows/bug-hunt/prepare-hunters.md"
 metadata = { "gc.scope_ref" = "body", "gc.scope_role" = "setup", "gc.on_fail" = "abort_scope", "gc.run_target" = "gc.run-operator" }
 
 [[steps]]
 id = "hunter-fanout"
 title = "Run bug hunters"
 needs = ["prepare-hunters"]
-description = "Run the configured read-only bug hunters."
+description_file = "../assets/workflows/bug-hunt/hunter-fanout.md"
 metadata = { "gc.scope_ref" = "body", "gc.scope_role" = "member", "gc.on_fail" = "abort_scope", "gc.run_target" = "gc.implementation-reviewer" }
 
 [[steps]]
 id = "synthesize-findings"
 title = "Synthesize bug-hunt findings"
 needs = ["hunter-fanout"]
-description = "Synthesize hunter reports into machine-readable findings."
+description_file = "../assets/workflows/bug-hunt/synthesize-findings.md"
 metadata = { "gc.scope_ref" = "body", "gc.scope_role" = "member", "gc.on_fail" = "abort_scope", "gc.run_target" = "gc.review-synthesizer" }
 
 [[steps]]
 id = "finalize"
 title = "Finalize bug hunt"
 needs = ["synthesize-findings"]
-description = "Finalize the parent epic and create or update child bug beads for qualifying findings."
+description_file = "../assets/workflows/bug-hunt/finalize.md"
 metadata = { "gc.scope_ref" = "body", "gc.scope_role" = "teardown", "gc.on_fail" = "abort_scope", "gc.run_target" = "gc.run-operator" }

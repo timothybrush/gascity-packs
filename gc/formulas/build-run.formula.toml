@@ -59,77 +59,32 @@ default = "false"
 id = "implement-initial"
 title = "Implement initial convoy"
 metadata = { "gc.run_target" = "gc.implementation-worker" }
-description = """
-If initial_implementation_workflow_id {{initial_implementation_workflow_id}}
-is empty, run implement on the approved initial convoy using context path
-{{context_path}}, drain policy {{drain_policy}}, and artifact root
-{{artifact_root}}. Stop and write final-report.md if implementation fails.
-
-If initial_implementation_workflow_id is non-empty, this is a continuation of
-a standalone implement run. Do not skip blindly. First verify all of:
-- the referenced bead exists and is a closed graph.v2 workflow
-- its title/formula/root key identifies the `implement` formula
-- gc.input_convoy_id matches this build-run target convoy
-- gc.outcome is pass
-- initial_summary_path {{initial_summary_path}} is non-empty, exists, and is
-  readable
-- the referenced workflow drain manifest, if present, reports succeeded item
-  roots or a recoverable summary explains any mismatch
-
-If verification passes, record that the initial implementation was reused and
-continue to gap-loop using initial_summary_path as the current implementation
-subject. If verification fails, write final-report.md under {{artifact_root}}
-with the failed check and stop.
-"""
+description_file = "../assets/workflows/build-run/implement-initial.md"
 
 [[steps]]
 id = "gap-loop"
 title = "Run gap-analysis fix loop"
 needs = ["implement-initial"]
 metadata = { "gc.run_target" = "gc.gap-analyst" }
-description = """
-Run gap-analysis against the current implementation subject. For a reused
-initial implementation, the first subject is initial_summary_path
-{{initial_summary_path}}. Otherwise use the summary or diff produced by
-implement-initial.
-
-If {{artifact_root}} already contains a valid gap-analysis report for that
-same subject and no later fix iteration has superseded it, reuse it as the
-current gap verdict and record the reuse. Otherwise run the public
-gap-analysis formula.
-
-On failed verdict, create a fix convoy from the report findings and run
-implement until pass or max_iterations {{max_iterations}} is exhausted. Preserve
-context path {{context_path}} and drain policy {{drain_policy}} for fix work.
-"""
+description_file = "../assets/workflows/build-run/gap-loop.md"
 
 [[steps]]
 id = "review-loop"
 title = "Run implementation review fix loop"
 needs = ["gap-loop"]
 metadata = { "gc.run_target" = "gc.implementation-reviewer" }
-description = """
-Run review. On failed verdict, create a fix convoy and run implement until pass
-or max_iterations {{max_iterations}} is exhausted. Preserve artifact root
-{{artifact_root}} for review and fix artifacts.
-"""
+description_file = "../assets/workflows/build-run/review-loop.md"
 
 [[steps]]
 id = "finalize"
 title = "Write final report"
 needs = ["review-loop"]
 metadata = { "gc.run_target" = "gc.run-operator" }
-description = """
-Write final-report.md under artifact root {{artifact_root}} for success,
-failure, timeout, unavailable prerequisites, or recovery-required states.
-"""
+description_file = "../assets/workflows/build-run/finalize.md"
 
 [[steps]]
 id = "publish"
 title = "Optionally publish successful build"
 needs = ["finalize"]
 metadata = { "gc.run_target" = "gc.publisher" }
-description = """
-If push {{push}} or open_pr {{open_pr}} are explicit opt-ins and final report
-passed, run publish through the pack publisher role.
-"""
+description_file = "../assets/workflows/build-run/publish.md"

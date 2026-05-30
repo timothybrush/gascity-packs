@@ -46,137 +46,49 @@ default = "separate"
 id = "snapshot"
 title = "Snapshot GitHub issue"
 metadata = { "gc.run_target" = "gc.run-operator" }
-description = """
-Resolved GitHub issue URL: {{github_issue_url}}
-Resolved artifact root override: {{artifact_root}} (empty means use the rig artifact root)
-Resolved mode: {{mode}}
-Resolved PR mode: {{pr_mode}}
-Resolved drain policy: {{drain_policy}}
-
-Artifact root semantics:
-- Resolve the durable artifact root with
-  `{{pack_root}}/assets/scripts/artifacts.py root --override "{{artifact_root}}"`.
-- Paths shown with a leading slash, such as
-  `/github/issues/<owner>/<repo>/<number>/source.json`, are
-  artifact-root-relative, not filesystem-root absolute.
-- Resolve concrete files with
-  `{{pack_root}}/assets/scripts/artifacts.py path --override "{{artifact_root}}" --relative "/github/issues/<owner>/<repo>/<number>/source.json" --mkdir-parents`.
-- Store absolute resolved artifact paths in bead metadata. Do not infer source
-  identity, workflow identity, readiness, or routing from artifact paths.
-
-Validate the issue URL with
-`{{pack_root}}/assets/scripts/github_api.py parse-url "{{github_issue_url}}" --kind issue`,
-reject shorthand inputs, and refresh the canonical GitHub source bead using
-`{{pack_root}}/assets/scripts/github_api.py issue-snapshot "{{github_issue_url}}"`.
-
-Write the returned snapshot JSON to
-artifact-root-relative path `/github/issues/<owner>/<repo>/<number>/source.json`.
-Then create or refresh the canonical GitHub source bead using this v0 contract:
-
-- Source beads are non-runnable index/cache beads. Do not route the source bead,
-  assign it, depend on it, or use it as a readiness gate.
-- Lookup uses object identity only:
-  `bd list --metadata-field gc.kind=github_source --metadata-field gc.github.kind=issue --metadata-field gc.github.repo=<owner>/<repo> --metadata-field gc.github.number=<number> --status open,in_progress,closed --limit 1 --json`.
-- Write `source-metadata.json` with flat string metadata:
-  `gc.kind=github_source`, `gc.github.kind=issue`,
-  `gc.github.repo=<owner>/<repo>`, `gc.github.number=<number>`,
-  `gc.github.url=<canonical_url>`, `gc.github.title=<title>`,
-  `gc.github.state=<state>`, `gc.github.author=<author>`,
-  `gc.github.labels=<comma-separated labels>`,
-  `gc.github.body_hash=<body_hash>`,
-  `gc.github.snapshot_path=<absolute source.json path>`,
-  `gc.github.updated_at=<updated_at>`.
-- If no bead exists, create it with
-  `bd create "GitHub issue source: <owner>/<repo>#<number>" --type task --labels gc.github-source,gc.github-issue --external-ref <canonical_url> --metadata @source-metadata.json`.
-- If a bead exists, refresh it with
-  `bd update <source-bead-id> --external-ref <canonical_url> --metadata @source-metadata.json`.
-
-Do not use title, label, assignee, or state changes to invalidate downstream
-fix reuse; `gc.github.body_hash` is the issue content key.
-"""
+description_file = "../assets/workflows/github-issue-fix-base/snapshot.md"
 
 [[steps]]
 id = "triage"
 title = "Run or reuse issue triage"
 needs = ["snapshot"]
 metadata = { "gc.run_target" = "gc.issue-triager" }
-description = """
-Invoke `github-issue-triage` with GitHub issue URL {{github_issue_url}} and
-artifact root {{artifact_root}}. Because triage is idempotent by issue body
-hash, this either returns the existing current-hash triage report/comment or
-creates a new one.
-"""
+description_file = "../assets/workflows/github-issue-fix-base/triage.md"
 
 [[steps]]
 id = "triage-gate"
 title = "Gate fix eligibility"
 needs = ["triage"]
 metadata = { "gc.run_target" = "gc.run-operator" }
-description = """
-Continue only for `reproduced` with `recommended_next_action: fix` or
-`not_reproduced` with `recommended_next_action: test_hardening`. Stop with a
-terminal status for `needs_info`, `not_a_bug`, `duplicate`,
-`security_sensitive`, unknown verdicts, or mismatched actions. For
-`security_sensitive`, record `security_process_required` and avoid normal public
-implementation and PR flow. The source issue URL is {{github_issue_url}}.
-"""
+description_file = "../assets/workflows/github-issue-fix-base/triage-gate.md"
 
 [[steps]]
 id = "resume-or-create-run"
 title = "Resume or create issue-fix run"
 needs = ["triage-gate"]
 metadata = { "gc.run_target" = "gc.run-operator" }
-description = """
-Resume the latest active nonterminal issue-fix run by default. If no active run
-exists, create one under
-artifact-root-relative path
-`/github/issues/<owner>/<repo>/<number>/fix/<run-id>/`, resolved with
-`{{pack_root}}/assets/scripts/artifacts.py path --override "{{artifact_root}}"
---relative "/github/issues/<owner>/<repo>/<number>/fix/<run-id>/" --mkdir-parents
---directory`. If the issue body hash changed while a run is active, run/reuse
-triage for the new hash and ask the human whether to continue the old run with
-updated context or start fresh.
-"""
+description_file = "../assets/workflows/github-issue-fix-base/resume-or-create-run.md"
 
 [[steps]]
 id = "update-status-started"
 title = "Update sticky issue-fix status"
 needs = ["resume-or-create-run"]
 metadata = { "gc.run_target" = "gc.run-operator" }
-description = """
-Render the sticky status comment with
-`{{pack_root}}/assets/scripts/github_reports.py render-issue-fix-status`, then
-create or update it with
-`{{pack_root}}/assets/scripts/github_api.py comment-create "{{github_issue_url}}" --body-file <status-comment.md>` or
-`{{pack_root}}/assets/scripts/github_api.py comment-update`. Keep one sticky
-status comment per issue-fix run and replace deleted comments idempotently.
-"""
+description_file = "../assets/workflows/github-issue-fix-base/update-status-started.md"
 
 [[steps]]
 id = "generate-requirements"
 title = "Generate approved requirements"
 needs = ["update-status-started"]
 metadata = { "gc.run_target" = "gc.requirements-planner" }
-description = """
-Mechanically derive `requirements.md` from the issue body and triage report.
-Mark the requirements artifact `status: approved` in both `interactive` and
-`autonomous` modes. For `not_reproduced` plus `test_hardening`, state test
-hardening explicitly and do not claim a confirmed bug fix. Current mode is
-{{mode}}.
-"""
+description_file = "../assets/workflows/github-issue-fix-base/generate-requirements.md"
 
 [[steps]]
 id = "design"
 title = "Generate or gate design"
 needs = ["generate-requirements"]
 metadata = { "gc.run_target" = "gc.design-author" }
-description = """
-Use the mayor design procedure over the approved generated requirements. In
-`interactive` mode, human-gate the design artifact. In
-`autonomous` mode, generate and approve the design non-interactively while
-recording the autonomous decision in the run artifacts. Current mode is
-{{mode}}.
-"""
+description_file = "../assets/workflows/github-issue-fix-base/design.md"
 
 [[steps]]
 id = "design-review"
@@ -184,12 +96,7 @@ title = "Review approved design"
 needs = ["design"]
 metadata = { "gc.run_target" = "gc.review-synthesizer" }
 expand = "github-issue-fix-design-review-work"
-description = """
-Review and refine the generated design before decomposition. The default pack
-implementation runs two focused reviewer agents and a synthesize/apply loop
-until the design is approved. Local packs can override this step and keep the
-same sink metadata protocol. Current mode is {{mode}}.
-"""
+description_file = "../assets/workflows/github-issue-fix-base/design-review.md"
 
 [steps.expand_vars]
 mode = "{{mode}}"
@@ -199,25 +106,14 @@ id = "decompose"
 title = "Generate or gate task convoy"
 needs = ["design-review"]
 metadata = { "gc.run_target" = "gc.task-decomposer" }
-description = """
-Use the mayor decomposition procedure over approved requirements and design. In
-`interactive` mode, human-gate decomposition/start. In `autonomous` mode,
-generate and approve the task convoy non-interactively. Each issue-fix run owns
-one generated implementation convoy; build-run fix convoys remain
-iteration-specific. Current mode is {{mode}}.
-"""
+description_file = "../assets/workflows/github-issue-fix-base/decompose.md"
 
 [[steps]]
 id = "build"
 title = "Run build quality loop"
 needs = ["decompose"]
 metadata = { "gc.run_target" = "gc.implementation-worker" }
-description = """
-Launch the existing `build-run` durable formula against the generated
-implementation convoy. `build-run` owns implement, gap-analysis/fix,
-review/fix, final reporting, and loop limits. Pass through drain policy
-{{drain_policy}}.
-"""
+description_file = "../assets/workflows/github-issue-fix-base/build.md"
 
 [[steps]]
 id = "publish-pr"
@@ -225,27 +121,11 @@ title = "Optionally publish PR"
 needs = ["build"]
 condition = "{{pr_mode}} != none"
 metadata = { "gc.run_target" = "gc.publisher" }
-description = """
-Only after build passes implementation, gap-analysis, and review, publish
-according to PR mode {{pr_mode}}: `draft` opens or updates a draft PR; `ready`
-opens or updates a ready-for-review PR. Resolve the authenticated actor through
-`{{pack_root}}/assets/scripts/github_api.py actor` and reuse an existing PR only
-when the workflow marker, repo/base, authenticated author, and requested mode
-are compatible. If a matching marker belongs to another author, record
-`foreign_pr_exists` and ask the human how to proceed. V0 never merges.
-"""
+description_file = "../assets/workflows/github-issue-fix-base/publish-pr.md"
 
 [[steps]]
 id = "finalize"
 title = "Finalize issue-fix result"
 needs = ["build", "publish-pr"]
 metadata = { "gc.run_target" = "gc.run-operator" }
-description = """
-Update the sticky issue-fix status comment at terminal success, failure,
-blocked, or unavailable states. Write final run metadata containing source bead
-id, body hash, triage report path, generated planning artifact paths,
-implementation convoy id, build final report, PR URL when present, and whether
-the run was resumed or newly created. Include launch input URL
-{{github_issue_url}}, artifact root {{artifact_root}}, mode {{mode}}, PR mode
-{{pr_mode}}, and drain policy {{drain_policy}}.
-"""
+description_file = "../assets/workflows/github-issue-fix-base/finalize.md"
