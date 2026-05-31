@@ -53,9 +53,9 @@ source_kind = "git"
   description = "Initial GitHub intake pack release."
 
 [[pack]]
-name = "slack"
+name = "slack-full"
 description = "Slack services, commands, and adapter integration for Gas City."
-source = "https://github.com/gastownhall/gascity-packs.git//slack-pack"
+source = "https://github.com/gastownhall/gascity-packs.git//slack-full"
 source_kind = "git"
 
   [[pack.release]]
