@@ -626,7 +626,7 @@ func TestHandlePublishInjectsIdentity(t *testing.T) {
 			cfg := config{slackBotToken: "xoxb-test"}
 			req := httptest.NewRequest(http.MethodPost, "/publish", strings.NewReader(tc.publishBody))
 			rec := httptest.NewRecorder()
-			handlePublish(cfg, reg)(rec, req)
+			handlePublish(cfg, reg, nil)(rec, req)
 
 			if rec.Code != http.StatusOK {
 				t.Fatalf("status = %d, want 200 (body=%q)", rec.Code, rec.Body.String())
@@ -694,7 +694,7 @@ func TestHandlePublishIdentityFallsBackToMetadataSourceSessionID(t *testing.T) {
 			cfg := config{slackBotToken: "xoxb-test"}
 			req := httptest.NewRequest(http.MethodPost, "/publish", strings.NewReader(tc.body))
 			rec := httptest.NewRecorder()
-			handlePublish(cfg, reg)(rec, req)
+			handlePublish(cfg, reg, nil)(rec, req)
 
 			if rec.Code != http.StatusOK {
 				t.Fatalf("status = %d, want 200 (body=%q)", rec.Code, rec.Body.String())
@@ -750,7 +750,7 @@ func TestHandlePublishRejectsEmptySession(t *testing.T) {
 			cfg := config{slackBotToken: "xoxb-test"}
 			req := httptest.NewRequest(http.MethodPost, "/publish", strings.NewReader(tc.body))
 			rec := httptest.NewRecorder()
-			handlePublish(cfg, reg)(rec, req)
+			handlePublish(cfg, reg, nil)(rec, req)
 
 			if rec.Code != http.StatusBadRequest {
 				t.Fatalf("status = %d, want 400 (body=%q)", rec.Code, rec.Body.String())

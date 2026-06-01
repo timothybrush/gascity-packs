@@ -338,6 +338,20 @@ type config struct {
 	// is set, else /tmp/gc-slack-adapter/subteam-aliases.json. Bead
 	// gpk-hmr.2.
 	subteamAliasStorePath string
+	// userAliasStorePath is the JSON file mapping a bare gc handle
+	// (e.g. "mayor") to a raw Slack target ID — a user (Uxxxx/Wxxxx) or
+	// a User Group (Sxxxx). handlePublish uses it to rewrite outbound
+	// `@handle` body tokens into Slack mention syntax so they render as
+	// clickable, notifying mentions instead of literal text (gpk-uha7).
+	// This is the outbound inverse of subteamAliasStorePath and follows
+	// the identical read-only, SIGHUP-or-restart reload contract: the
+	// operator edits the file directly (or via a future `gc slack
+	// user-alias` command). A handle absent from the map is left
+	// literal — fail-safe, no surprise pings. Sourced from
+	// SLACK_USER_ALIAS_FILE, defaulting to
+	// <GC_CITY_PATH>/.gc/slack/slack-user-aliases.json when GC_CITY_PATH
+	// is set, else /tmp/gc-slack-adapter/slack-user-aliases.json.
+	userAliasStorePath string
 	// fileUploadRoot is the absolute filesystem prefix
 	// /publish-file is allowed to read. Empty disables /publish-file
 	// entirely (fail-closed). gc and the adapter share a filesystem,
@@ -466,6 +480,7 @@ func loadConfigFromEnv(getenv func(string) string) (config, error) {
 	defaultThreadSessionsPath := "/tmp/gc-slack-adapter/thread_sessions.json"
 	defaultRoomLaunchPath := "/tmp/gc-slack-adapter/room_launch_mappings.json"
 	defaultSubteamAliasPath := "/tmp/gc-slack-adapter/subteam-aliases.json"
+	defaultUserAliasPath := "/tmp/gc-slack-adapter/slack-user-aliases.json"
 	if cityPath := getenv("GC_CITY_PATH"); cityPath != "" {
 		defaultMappingPath = filepath.Join(cityPath, ".gc", "slack", "channel_mappings.json")
 		defaultRigMappingPath = filepath.Join(cityPath, ".gc", "slack", "rig_mappings.json")
@@ -473,6 +488,7 @@ func loadConfigFromEnv(getenv func(string) string) (config, error) {
 		defaultThreadSessionsPath = filepath.Join(cityPath, ".gc", "slack", "thread_sessions.json")
 		defaultRoomLaunchPath = filepath.Join(cityPath, ".gc", "slack", "room_launch_mappings.json")
 		defaultSubteamAliasPath = filepath.Join(cityPath, ".gc", "slack", "subteam-aliases.json")
+		defaultUserAliasPath = filepath.Join(cityPath, ".gc", "slack", "slack-user-aliases.json")
 		cfg.cityPath = cityPath
 	}
 	cfg.channelMappingPath = envOrFn("SLACK_CHANNEL_MAPPING_PATH", defaultMappingPath)
@@ -485,6 +501,7 @@ func loadConfigFromEnv(getenv func(string) string) (config, error) {
 	cfg.threadSessionsStorePath = envOrFn("GC_SLACK_THREAD_SESSIONS_FILE", defaultThreadSessionsPath)
 	cfg.roomLaunchPath = envOrFn("GC_SLACK_ROOM_LAUNCH_FILE", defaultRoomLaunchPath)
 	cfg.subteamAliasStorePath = envOrFn("SLACK_SUBTEAM_ALIAS_FILE", defaultSubteamAliasPath)
+	cfg.userAliasStorePath = envOrFn("SLACK_USER_ALIAS_FILE", defaultUserAliasPath)
 
 	// Retention controls. Defaults: keep inbound files for 7 days,
 	// sweep every hour. Setting either to "0" disables the janitor.
@@ -953,6 +970,13 @@ func main() {
 	log.Printf("subteam alias map: store=%s entries=%d (read-only; SIGHUP or restart to reload)",
 		cfg.subteamAliasStorePath, subteamAliases.Len())
 
+	userAliases, err := newUserAliasMap(cfg.userAliasStorePath)
+	if err != nil {
+		log.Fatalf("user alias map: %v", err)
+	}
+	log.Printf("user alias map: store=%s entries=%d (read-only; SIGHUP or restart to reload)",
+		cfg.userAliasStorePath, userAliases.Len())
+
 	channelMapReg, err := newChannelMappingRegistry(cfg.channelMappingPath)
 	if err != nil {
 		log.Fatalf("channel mapping registry: %v", err)
@@ -1004,7 +1028,7 @@ func main() {
 	// proxies through /svc/{name}/ (proxy_process mode), or on a
 	// 127.0.0.1 TCP listener (legacy nohup mode).
 	internalMux := http.NewServeMux()
-	internalMux.HandleFunc("/publish", handlePublish(cfg, identityReg))
+	internalMux.HandleFunc("/publish", handlePublish(cfg, identityReg, userAliases))
 	internalMux.HandleFunc("/publish-file", handlePublishFile(cfg, identityReg))
 	internalMux.HandleFunc("/react", handleReact(cfg))
 	internalMux.HandleFunc("POST /identity", handleIdentity(identityReg))
@@ -1086,7 +1110,7 @@ func main() {
 	signal.Notify(hupCh, syscall.SIGHUP)
 	defer signal.Stop(hupCh)
 	go runReloadLoop(reloadStop, hupCh, func() {
-		logReloadOutcome(appsReg, channelMapReg, rigMapReg, roomLaunchReg, subteamAliases)
+		logReloadOutcome(appsReg, channelMapReg, rigMapReg, roomLaunchReg, subteamAliases, userAliases)
 	})
 
 	stop := make(chan os.Signal, 1)
@@ -1165,7 +1189,7 @@ func registerAdapter(cfg config) error {
 	return nil
 }
 
-func handlePublish(cfg config, reg *identityRegistry) http.HandlerFunc {
+func handlePublish(cfg config, reg *identityRegistry, userAliases *userAliasMap) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -1204,9 +1228,14 @@ func handlePublish(cfg config, reg *identityRegistry) http.HandlerFunc {
 			return
 		}
 
+		// Rewrite outbound @handle body mentions to Slack mention syntax
+		// for handles the operator has mapped (gpk-uha7). Unmapped handles
+		// and a nil/empty map leave the text untouched, so this is a no-op
+		// for installs that haven't curated slack-user-aliases.json.
+		rewrittenText := userAliases.rewrite(req.Text)
 		post := slackPostMessageReq{
 			Channel:  req.Conversation.ConversationID,
-			Text:     req.Text,
+			Text:     rewrittenText,
 			ThreadTS: req.ReplyToMessageID,
 		}
 		identityApplied := ""
@@ -1218,9 +1247,9 @@ func handlePublish(cfg config, reg *identityRegistry) http.HandlerFunc {
 				identityApplied = rec.Username
 			}
 		}
-		log.Printf("publish: conv=%s text=%dch reply_to=%s idem=%s session=%s as=%q",
+		log.Printf("publish: conv=%s text=%dch reply_to=%s idem=%s session=%s as=%q mentions_rewritten=%t",
 			req.Conversation.ConversationID, len(req.Text), req.ReplyToMessageID,
-			req.IdempotencyKey, identitySessionID, identityApplied)
+			req.IdempotencyKey, identitySessionID, identityApplied, rewrittenText != req.Text)
 
 		slackResp, err := postToSlack(cfg.slackBotToken, post)
 		receipt := publishReceipt{Conversation: req.Conversation}
