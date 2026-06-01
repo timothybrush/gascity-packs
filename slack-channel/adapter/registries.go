@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"net/url"
 	"regexp"
 	"sort"
 	"strings"
@@ -111,6 +112,18 @@ func validateIdentity(sessionID, username, iconURL, iconEmoji string) error {
 	}
 	if username == "" && iconURL == "" && iconEmoji == "" {
 		return fmt.Errorf("at least one of username, icon_url, icon_emoji is required")
+	}
+	if iconURL != "" {
+		// The icon_url is forwarded verbatim to Slack's chat.postMessage. A
+		// non-https (or scheme-relative) URL would either be rejected by
+		// Slack or, worse, fetched over plaintext, so require https up front.
+		u, err := url.Parse(iconURL)
+		if err != nil {
+			return fmt.Errorf("icon_url is not a valid URL: %w", err)
+		}
+		if u.Scheme != "https" || u.Host == "" {
+			return fmt.Errorf("icon_url must be an absolute https:// URL (got %q)", iconURL)
+		}
 	}
 	return nil
 }

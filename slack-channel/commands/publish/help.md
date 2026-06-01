@@ -20,7 +20,7 @@ Flags:
   --session    Session whose binding to publish into. Defaults to the
                current session ($GC_SESSION_ID).
   --body       Message text. Mutually exclusive with --body-file.
-  --body-file  Read the message body from a file.
+  --body-file  Read the message body from a file (must be a regular file).
   --reply-to   Slack message ts to thread under (optional).
 
 Examples:

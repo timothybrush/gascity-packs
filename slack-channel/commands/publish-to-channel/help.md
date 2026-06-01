@@ -13,7 +13,7 @@ Usage:
 Flags:
   --channel    Slack channel id (C..., G..., or D...) — required.
   --body       Message text. Mutually exclusive with --body-file.
-  --body-file  Read the message body from a file.
+  --body-file  Read the message body from a file (must be a regular file).
   --session    Session to attribute the post to (identity override).
                Defaults to the current session ($GC_SESSION_ID).
   --thread-ts  Slack message ts to thread under (optional).

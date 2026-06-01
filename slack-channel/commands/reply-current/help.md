@@ -19,7 +19,7 @@ Usage:
 Flags:
   --session         Override the session id (default: $GC_SESSION_ID).
   --body            Message text. Mutually exclusive with --body-file.
-  --body-file       Read the message body from a file.
+  --body-file       Read the message body from a file (must be a regular file).
   --thread-current  Thread under the latest inbound message. Mutually
                     exclusive with --reply-to.
   --reply-to        Slack message ts to thread under.

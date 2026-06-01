@@ -18,6 +18,13 @@ sc_require() {
 
 sc_city() {
   [ -n "${GC_CITY_NAME:-}" ] || sc_die "GC_CITY_NAME is not set" 1
+  # GC_CITY_NAME is interpolated into the adapter URL path (sc_adapter_base),
+  # so reject characters that would alter the path or smuggle a query/fragment.
+  case "$GC_CITY_NAME" in
+    *[/?#%]* | *[[:space:]]*)
+      sc_die "GC_CITY_NAME contains characters not allowed in a URL path: '$GC_CITY_NAME'" 1
+      ;;
+  esac
   printf '%s' "$GC_CITY_NAME"
 }
 
@@ -74,7 +81,8 @@ sc_help() {
 }
 
 # sc_load_body BODY BODY_FILE — resolve a message body from --body or
-# --body-file (mutually exclusive, exactly one required).
+# --body-file (mutually exclusive, exactly one required). --body-file must
+# name a readable regular file (not a directory, device, or missing path).
 sc_load_body() {
   if [ -n "$1" ] && [ -n "$2" ]; then
     sc_die "pass --body OR --body-file, not both" 2
@@ -84,6 +92,7 @@ sc_load_body() {
     return
   fi
   [ -n "$2" ] || sc_die "either --body or --body-file is required" 2
+  [ -f "$2" ] || sc_die "--body-file is not a regular file: $2" 2
   cat "$2"
 }
 

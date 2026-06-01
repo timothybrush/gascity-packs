@@ -61,6 +61,9 @@ func TestValidateIdentity(t *testing.T) {
 		{"no session", "", "PL", "", "", "session_id"},
 		{"both icons", "s1", "", "u", "e", "mutually exclusive"},
 		{"all empty", "s1", "", "", "", "at least one"},
+		{"http icon", "s1", "", "http://x/y.png", "", "https"},
+		{"scheme-relative icon", "s1", "", "//x/y.png", "", "https"},
+		{"schemeless icon", "s1", "", "x/y.png", "", "https"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

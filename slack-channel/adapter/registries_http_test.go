@@ -149,7 +149,7 @@ func TestRemoveSaveErrors(t *testing.T) {
 	if rec := doMethod(http.MethodDelete, srv.handleIdentityRemove(), `{"session_id":"s1"}`); rec.Code != http.StatusInternalServerError {
 		t.Errorf("identity remove save error status=%d, want 500", rec.Code)
 	}
-	if rec := doMethod(http.MethodDelete, srv.handleAliasRemove(), `{"handle":"mayor"}`); rec.Code != http.StatusBadRequest {
-		t.Errorf("alias remove save error status=%d, want 400", rec.Code)
+	if rec := doMethod(http.MethodDelete, srv.handleAliasRemove(), `{"handle":"mayor"}`); rec.Code != http.StatusInternalServerError {
+		t.Errorf("alias remove save error status=%d, want 500", rec.Code)
 	}
 }

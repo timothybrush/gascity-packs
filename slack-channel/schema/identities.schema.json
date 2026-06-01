@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/gastownhall/gascity-packs/slack-channel/schema/identities.schema.json",
+  "$id": "https://github.com/gastownhall/gascity-packs/blob/main/slack-channel/schema/identities.schema.json",
   "title": "slack-channel identities.json",
   "description": "Authoritative schema for the per-session identity registry persisted at <GC_CITY_PATH>/.gc/slack-channel/identities.json. The slack-channel adapter is the sole writer (via the identity verb endpoint) and reader (injected into chat.postMessage on every outbound). The JSON object key is the gc session id. icon_url and icon_emoji are mutually exclusive; at least one of username / icon_url / icon_emoji is set.",
   "type": "object",

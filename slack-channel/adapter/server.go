@@ -1,7 +1,6 @@
 package main
 
 import (
-	"fmt"
 	"maps"
 	"net/http"
 	"sort"
@@ -238,11 +237,12 @@ func (s *server) upsertHandleAlias(handle, sessionID string) (handleAlias, error
 	return rec, nil
 }
 
+// removeHandleAlias deletes a handle alias. Like removeIdentity it is
+// idempotent and does not re-validate the handle: callers (the verb
+// endpoint) reject an empty handle up front, so the only error it can
+// surface is a registry write failure.
 func (s *server) removeHandleAlias(handle string) (bool, error) {
 	h := normalizeHandle(handle)
-	if h == "" {
-		return false, fmt.Errorf("handle is required")
-	}
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 

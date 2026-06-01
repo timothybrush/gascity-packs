@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/gastownhall/gascity-packs/slack-channel/schema/channel_mappings.schema.json",
+  "$id": "https://github.com/gastownhall/gascity-packs/blob/main/slack-channel/schema/channel_mappings.schema.json",
   "title": "slack-channel channel_mappings.json",
   "description": "Authoritative schema for the channel binding registry persisted at <GC_CITY_PATH>/.gc/slack-channel/channel_mappings.json. The slack-channel adapter is the sole writer (via the bind-dm / bind-room verb endpoints) and reader (on the inbound path). The JSON object key is the composite '<workspace_id>:<channel_id>'. A message arriving in a bound channel is delivered to every session in session_ids.",
   "type": "object",

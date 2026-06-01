@@ -110,9 +110,13 @@ func (s *server) handleAliasRemove() http.HandlerFunc {
 			writeJSONError(w, http.StatusBadRequest, fmt.Sprintf("decode: %v", err))
 			return
 		}
+		if normalizeHandle(req.Handle) == "" {
+			writeJSONError(w, http.StatusBadRequest, "handle is required")
+			return
+		}
 		removed, err := s.removeHandleAlias(req.Handle)
 		if err != nil {
-			writeJSONError(w, http.StatusBadRequest, err.Error())
+			writeJSONError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
 		log.Printf("handle-alias remove: handle=%s removed=%v", normalizeHandle(req.Handle), removed)

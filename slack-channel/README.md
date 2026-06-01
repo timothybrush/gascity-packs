@@ -184,6 +184,38 @@ app and point its Request URL at `https://<your-funnel-host>/slack/interactions`
 The adapter verifies the signature and acks with `200` so Slack dismisses
 the interaction; it does no custom modal handling (that is Tier 3).
 
+## Security posture
+
+A few deliberate choices in the shipped manifest and adapter are worth
+understanding before you install:
+
+- **`chat:write.public` (manifest scope).** This lets the bot post to any
+  *public* channel without first being invited — `publish-to-channel
+  --channel <id>` reaches any public channel in the workspace, and a bound
+  session can publish to a public channel it was bound to without a join
+  step. The blast radius is "every public channel in this workspace." If
+  that is broader than you want, drop `chat:write.public` from
+  [`manifest/app.json`](./manifest/app.json) and invite the bot to each
+  channel it should post in (Slack then requires `conversations.join` /
+  manual membership instead).
+- **`token_rotation_enabled: false` (manifest setting).** The adapter
+  authenticates with a long-lived bot token (`SLACK_BOT_TOKEN`) rather than
+  rotating, expiring tokens. Rotation would require the adapter to persist
+  and refresh credentials; for a single-workspace Tier-2 bridge the static
+  token is simpler and the token never leaves the adapter (verbs never see
+  it). Treat the token as a secret, scope it to one workspace, and rotate it
+  by hand if it is exposed. Enable rotation in the Slack app settings if your
+  deployment policy requires it.
+- **Internal verb listener is loopback / dev-only.** When the adapter is
+  *not* run as a gc `proxy_process` service (`GC_SERVICE_SOCKET` unset), the
+  verb endpoints are served over plain TCP on `127.0.0.1:8776`
+  (`LISTEN_INTERNAL`) with no authentication — anything that can reach that
+  loopback port can mutate the registries. This mode is for local
+  development only. In production gc runs the adapter as a `proxy_process`
+  service and the verb endpoints bind a `0600` Unix-domain socket
+  (`GC_SERVICE_SOCKET`) that only the gc supervisor can reach; do not expose
+  `127.0.0.1:8776` beyond loopback.
+
 ## Choosing a tier
 
 - **slack-mini** (Tier 1) — one outbound verb, `app_mention` → mayor. No

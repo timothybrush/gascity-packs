@@ -46,12 +46,27 @@ def test_channel_mappings_valid():
     _validator(CHANNEL_V).validate(doc)
 
 
+def test_channel_mappings_dm_kind_valid():
+    doc = {
+        "T123:D1": {
+            "workspace_id": "T123",
+            "channel_id": "D1",
+            "kind": "dm",
+            "session_ids": ["s1"],
+            "created_at": "2026-05-30T12:00:00Z",
+            "updated_at": "2026-05-30T12:00:00Z",
+        }
+    }
+    _validator(CHANNEL_V).validate(doc)
+
+
 @pytest.mark.parametrize(
     "mutate",
     [
         lambda r: r.pop("kind"),
         lambda r: r.update(kind="thread"),
         lambda r: r.update(session_ids=[]),
+        lambda r: r.update(session_ids=["s1", "s1"]),
         lambda r: r.update(extra="nope"),
     ],
 )
