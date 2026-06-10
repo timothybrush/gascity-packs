@@ -111,27 +111,29 @@ test_shutdown_dance_lifecycle_and_audit_contracts() {
         fail "dog prompt DOG_DONE guidance should use the normalized requester endpoint"
 }
 
-test_composition_ordering_is_documented() {
-    grep -F 'safe by default' "$GASTOWN/README.md" >/dev/null ||
-        fail "README should document that schema-2 import cities are safe by default"
-    grep -F 'Do **not** add an explicit `[imports.maintenance]`' "$GASTOWN/README.md" >/dev/null ||
-        fail "README should warn schema-2 import cities away from an explicit maintenance import"
-    grep -F 'workspace.includes' "$GASTOWN/README.md" >/dev/null ||
-        fail "README should scope the before-gastown ordering advice to legacy workspace.includes cities"
-    grep -F 'list it before gastown' "$GASTOWN/README.md" >/dev/null ||
-        fail "README should keep the legacy includes advice to list maintenance before gastown"
+test_composition_is_documented() {
+    # The retired maintenance pack is gone: the runtime composes the builtin
+    # core pack via explicit city.toml includes, and gastown owns the only
+    # mol-shutdown-dance. The docs must describe that model, not the old
+    # fallback/ordering workarounds.
+    grep -F 'builtin core pack' "$GASTOWN/README.md" >/dev/null ||
+        fail "README should attribute mechanical housekeeping to the builtin core pack"
+    ! grep -F '[imports.maintenance]' "$GASTOWN/README.md" >/dev/null ||
+        fail "README should not reference the retired maintenance pack import"
+    ! grep -Fi 'implicit maintenance' "$GASTOWN/README.md" >/dev/null ||
+        fail "README should not describe implicit maintenance injection"
     grep -F 'gc formula show mol-shutdown-dance' "$GASTOWN/README.md" >/dev/null ||
         fail "README should document how to verify the effective shutdown-dance formula"
-    grep -F '[imports.maintenance]' "$GASTOWN/pack.toml" >/dev/null ||
-        fail "pack.toml should warn schema-2 import cities away from an explicit maintenance import"
-    grep -F 'workspace.includes' "$GASTOWN/pack.toml" >/dev/null ||
-        fail "pack.toml should scope before-gastown ordering advice to legacy workspace.includes cities"
+    grep -F 'builtin core' "$GASTOWN/pack.toml" >/dev/null ||
+        fail "pack.toml should attribute mechanical housekeeping to the builtin core pack"
+    ! grep -F '[imports.maintenance]' "$GASTOWN/pack.toml" >/dev/null ||
+        fail "pack.toml should not reference the retired maintenance pack import"
 }
 
 test_dog_assets_are_pack_local
 test_retired_dog_formulas_are_not_reintroduced
 test_shutdown_dance_contracts_are_executable
 test_shutdown_dance_lifecycle_and_audit_contracts
-test_composition_ordering_is_documented
+test_composition_is_documented
 
 echo "gastown pack asset tests passed"

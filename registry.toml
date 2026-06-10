@@ -26,6 +26,13 @@ source_kind = "git"
   hash = "sha256:275565384903ae22bf9187aa821df135724bd4a639be18e4b4e76f739a555cc4"
   description = "Refresh Gas Town workflow pack release pin."
 
+  [[pack.release]]
+  version = "0.1.2"
+  ref = "main"
+  commit = "1f45471e8bdc5dece030dfc99406ca7d3d45f9c0"
+  hash = "sha256:5d68300d4fdf04b705cb0b4e09ceb55406e42e7ab0d0a12ddba3b1e4d8628b92"
+  description = "Gastown owns its dog pool and shutdown dance; docs reflect the explicit-includes runtime (maintenance pack retired)."
+
 [[pack]]
 name = "cass"
 description = "Coding Agent Session Search prompt fragments and skill overlays for Gas City."
