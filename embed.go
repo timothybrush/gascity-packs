@@ -10,19 +10,29 @@ import (
 	"io/fs"
 )
 
-// packsFS embeds the gastown pack tree. Additional packs join this
-// pattern list as consumers need them.
+// packsFS embeds the pack trees consumers depend on. Additional packs
+// join this pattern list as consumers need them.
 //
-//go:embed all:gastown
+//go:embed all:gastown all:gascity
 var packsFS embed.FS
 
 // Gastown returns the gastown pack content rooted at the pack directory
 // (pack.toml at the top level), matching the layout consumers compose.
 func Gastown() fs.FS {
-	sub, err := fs.Sub(packsFS, "gastown")
+	return packSub("gastown")
+}
+
+// Gascity returns the gascity planning/implementation pack content rooted
+// at the pack directory (pack.toml at the top level).
+func Gascity() fs.FS {
+	return packSub("gascity")
+}
+
+func packSub(name string) fs.FS {
+	sub, err := fs.Sub(packsFS, name)
 	if err != nil {
-		// fs.Sub only fails on an invalid path literal; "gastown" is
-		// embedded above, so this is unreachable at runtime.
+		// fs.Sub only fails on an invalid path literal; every name passed
+		// here is embedded above, so this is unreachable at runtime.
 		panic(err)
 	}
 	return sub
