@@ -129,6 +129,59 @@ def test_idempotency_and_reply_to_propagate(monkeypatch: pytest.MonkeyPatch) -> 
     assert captured["body"]["idempotency_key"] == "key-42"
 
 
+def test_auto_derives_stable_idempotency_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    """gpk-lbhl: with no --idempotency-key, the key is derived and stable.
+
+    Two identical invocations (the shape of a retry after a delivered-but-
+    timed-out POST) must send the SAME idempotency_key so the adapter
+    dedupes the second post instead of duplicating the reply.
+    """
+    rc, common = _import_modules()
+    keys: list[str] = []
+
+    def fake_request(method: str, url: str, body: dict[str, Any] | None = None,
+                     *, csrf: bool = True, timeout: float = 30.0) -> dict[str, Any]:
+        keys.append((body or {}).get("idempotency_key", ""))
+        return {"Receipt": {"Delivered": True}}
+
+    monkeypatch.setattr(common, "_request", fake_request)
+    monkeypatch.setattr(common, "find_latest_inbound_for_session", lambda _sid: None)
+    monkeypatch.setattr(common, "look_up_binding", lambda _sid: None)
+
+    argv = [
+        "--session", "gc-test-session",
+        "--conversation-id", "D0123ROOM",
+        "--body", "x",
+        "--reply-to", "1700000.000100",
+    ]
+    assert rc.main(argv) == 0
+    assert rc.main(argv) == 0
+    assert keys[0] != ""
+    assert keys[0] == keys[1]
+    assert keys[0].startswith("reply-current:")
+
+
+def test_derived_key_varies_with_body(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A different body yields a different fingerprint (no cross-collapse)."""
+    rc, common = _import_modules()
+    keys: list[str] = []
+
+    def fake_request(method: str, url: str, body: dict[str, Any] | None = None,
+                     *, csrf: bool = True, timeout: float = 30.0) -> dict[str, Any]:
+        keys.append((body or {}).get("idempotency_key", ""))
+        return {"Receipt": {"Delivered": True}}
+
+    monkeypatch.setattr(common, "_request", fake_request)
+    monkeypatch.setattr(common, "find_latest_inbound_for_session", lambda _sid: None)
+    monkeypatch.setattr(common, "look_up_binding", lambda _sid: None)
+
+    base = ["--session", "gc-test-session", "--conversation-id", "D0123ROOM",
+            "--reply-to", "1700000.000100"]
+    assert rc.main(base + ["--body", "first"]) == 0
+    assert rc.main(base + ["--body", "second"]) == 0
+    assert keys[0] != keys[1]
+
+
 def test_reply_current_exits_nonzero_on_adapter_delivered_false(
         monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture) -> None:
     """Mirror gpk-5sk's gate for the reply-current CLI on the adapter route.

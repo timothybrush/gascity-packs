@@ -13,6 +13,7 @@ The lookup order:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import pathlib
@@ -20,6 +21,23 @@ import sys
 from typing import Any
 
 import slack_intake_common as common
+
+
+def _derive_idempotency_key(
+    *, session_id: str, conversation_id: str, reply_to: str, body: str
+) -> str:
+    """Derive a stable idempotency key from the reply's identifying fields.
+
+    When the caller does not pass ``--idempotency-key``, a retry of the
+    *same* logical reply (same session, conversation, thread anchor and
+    body) must reuse the same key so the adapter replays the original
+    receipt instead of posting a duplicate after a delivered-but-timed-out
+    POST (gpk-lbhl). The fingerprint is deterministic, matching the bead's
+    "client-supplied idempotency key / message fingerprint" contract.
+    """
+    fingerprint = "\x00".join((session_id, conversation_id, reply_to, body))
+    digest = hashlib.sha256(fingerprint.encode("utf-8")).hexdigest()
+    return f"reply-current:{digest}"
 
 
 def _load_body(args: argparse.Namespace) -> str:
@@ -121,7 +139,10 @@ def main(argv: list[str]) -> int:
         ),
     )
     parser.add_argument("--idempotency-key", default="",
-                        help="Caller-supplied idempotency key")
+                        help=("Caller-supplied idempotency key. When omitted, a "
+                              "deterministic key is derived from the session, "
+                              "conversation, thread anchor and body so a retry of "
+                              "the same reply dedupes instead of double-posting."))
     parser.add_argument("--body", default="")
     parser.add_argument("--body-file", default="")
     parser.add_argument(
@@ -162,6 +183,15 @@ def main(argv: list[str]) -> int:
             )
         reply_to = match[0]
 
+    idempotency_key = args.idempotency_key.strip()
+    if not idempotency_key:
+        idempotency_key = _derive_idempotency_key(
+            session_id=session_id,
+            conversation_id=conv["conversation_id"],
+            reply_to=reply_to,
+            body=body,
+        )
+
     publish_kwargs = dict(
         session_id=session_id,
         scope_id=conv["scope_id"],
@@ -171,7 +201,7 @@ def main(argv: list[str]) -> int:
         kind=conv["kind"],
         text=body,
         reply_to_message_id=reply_to,
-        idempotency_key=args.idempotency_key,
+        idempotency_key=idempotency_key,
     )
     try:
         if args.via == "adapter":

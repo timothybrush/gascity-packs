@@ -1028,7 +1028,7 @@ func main() {
 	// proxies through /svc/{name}/ (proxy_process mode), or on a
 	// 127.0.0.1 TCP listener (legacy nohup mode).
 	internalMux := http.NewServeMux()
-	internalMux.HandleFunc("/publish", handlePublish(cfg, identityReg, userAliases))
+	internalMux.HandleFunc("/publish", handlePublish(cfg, identityReg, userAliases, newPublishDedupCache(publishDedupTTL)))
 	internalMux.HandleFunc("/publish-file", handlePublishFile(cfg, identityReg))
 	internalMux.HandleFunc("/react", handleReact(cfg))
 	internalMux.HandleFunc("POST /identity", handleIdentity(identityReg))
@@ -1189,7 +1189,78 @@ func registerAdapter(cfg config) error {
 	return nil
 }
 
-func handlePublish(cfg config, reg *identityRegistry, userAliases *userAliasMap) http.HandlerFunc {
+// publishDedupTTL bounds how long a delivered receipt is remembered for
+// idempotent replay. It only needs to span the retry-after-timeout window:
+// the pack's HTTP client times out at 30s and an agent retry follows shortly
+// after, so a couple of minutes comfortably covers the reported failure mode
+// (gpk-lbhl) while staying short enough that an intentional identical resend
+// minutes later is not silently swallowed.
+const publishDedupTTL = 2 * time.Minute
+
+// publishDedupCache remembers delivered publish receipts keyed by the
+// caller-supplied idempotency key, so a retry after a delivered-but-
+// timed-out POST returns the original receipt instead of posting a second
+// Slack message (gpk-lbhl). Only delivered receipts are cached: a retry
+// after a genuine (non-delivered) failure must still re-attempt delivery,
+// so failures are never remembered. An empty idempotency key disables
+// dedup for that call.
+type publishDedupCache struct {
+	mu      sync.Mutex
+	entries map[string]publishDedupEntry
+	ttl     time.Duration
+	now     func() time.Time
+}
+
+type publishDedupEntry struct {
+	receipt   publishReceipt
+	expiresAt time.Time
+}
+
+func newPublishDedupCache(ttl time.Duration) *publishDedupCache {
+	return &publishDedupCache{
+		entries: make(map[string]publishDedupEntry),
+		ttl:     ttl,
+		now:     time.Now,
+	}
+}
+
+// Get returns the cached receipt for key when one is present and unexpired.
+func (c *publishDedupCache) Get(key string) (publishReceipt, bool) {
+	if key == "" {
+		return publishReceipt{}, false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	e, ok := c.entries[key]
+	if !ok {
+		return publishReceipt{}, false
+	}
+	if !c.now().Before(e.expiresAt) {
+		delete(c.entries, key)
+		return publishReceipt{}, false
+	}
+	return e.receipt, true
+}
+
+// Put records a delivered receipt under key and sweeps expired entries so
+// the map stays bounded under churn. Empty keys and non-delivered receipts
+// are ignored.
+func (c *publishDedupCache) Put(key string, receipt publishReceipt) {
+	if key == "" || !receipt.Delivered {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	now := c.now()
+	c.entries[key] = publishDedupEntry{receipt: receipt, expiresAt: now.Add(c.ttl)}
+	for k, e := range c.entries {
+		if !now.Before(e.expiresAt) {
+			delete(c.entries, k)
+		}
+	}
+}
+
+func handlePublish(cfg config, reg *identityRegistry, userAliases *userAliasMap, dedup *publishDedupCache) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -1251,6 +1322,18 @@ func handlePublish(cfg config, reg *identityRegistry, userAliases *userAliasMap)
 			req.Conversation.ConversationID, len(req.Text), req.ReplyToMessageID,
 			req.IdempotencyKey, identitySessionID, identityApplied, rewrittenText != req.Text)
 
+		// Idempotent replay: if this idempotency key already produced a
+		// delivered receipt, return it without re-posting. This is the
+		// chokepoint that absorbs a retry after a delivered-but-timed-out
+		// POST (gpk-lbhl) — the original Slack message stands, no duplicate.
+		if cached, ok := dedup.Get(req.IdempotencyKey); ok {
+			log.Printf("publish: dedup hit idem=%s conv=%s -> returning cached receipt (no re-post)",
+				req.IdempotencyKey, req.Conversation.ConversationID)
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(cached)
+			return
+		}
+
 		slackResp, err := postToSlack(cfg.slackBotToken, post)
 		receipt := publishReceipt{Conversation: req.Conversation}
 		switch {
@@ -1275,6 +1358,10 @@ func handlePublish(cfg config, reg *identityRegistry, userAliases *userAliasMap)
 			receipt.Delivered = true
 			receipt.MessageID = slackResp.TS
 		}
+		// Remember delivered receipts so a subsequent retry with the same
+		// idempotency key replays this receipt instead of re-posting. Put
+		// ignores empty keys and non-delivered receipts.
+		dedup.Put(req.IdempotencyKey, receipt)
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(receipt)
 	}
