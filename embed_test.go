@@ -21,16 +21,36 @@ func TestGastownEmbedsPackContent(t *testing.T) {
 	}
 }
 
-func TestGastownEmbedHasNoUnexpectedRoots(t *testing.T) {
+func TestGascityEmbedsPackContent(t *testing.T) {
+	pack := Gascity()
+	for _, rel := range []string{
+		"pack.toml",
+		"formulas/implement.formula.toml",
+		"skills/plan/SKILL.md",
+		"scripts/checks/gap-analysis-approved.sh",
+	} {
+		if _, err := fs.Stat(pack, rel); err != nil {
+			t.Errorf("gascity pack missing %s: %v", rel, err)
+		}
+	}
+}
+
+func TestEmbedHasNoUnexpectedRoots(t *testing.T) {
 	entries, err := fs.ReadDir(packsFS, ".")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(entries) != 1 || entries[0].Name() != "gastown" {
+	want := map[string]bool{"gastown": true, "gascity": true}
+	if len(entries) != len(want) {
 		names := make([]string, 0, len(entries))
 		for _, e := range entries {
 			names = append(names, e.Name())
 		}
-		t.Fatalf("embedded roots = %v, want [gastown]", names)
+		t.Fatalf("embedded roots = %v, want gastown + gascity", names)
+	}
+	for _, e := range entries {
+		if !want[e.Name()] {
+			t.Fatalf("unexpected embedded root %q", e.Name())
+		}
 	}
 }
