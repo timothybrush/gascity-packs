@@ -128,7 +128,9 @@ WORKTREE=$(bd show {{issue}} --json | jq -r '.metadata.work_dir // empty')
 if [ -n "$WORKTREE" ] && [ -d "$WORKTREE" ]; then
   cd "$WORKTREE"
 else
-  WORKTREE_PATH=$(pwd)/worktrees/{{issue}}
+  WORKTREE_ROOT="$(pwd)/.gc/worktrees"
+  mkdir -p "$WORKTREE_ROOT"
+  WORKTREE_PATH="$WORKTREE_ROOT/{{issue}}"
   git worktree add "$WORKTREE_PATH" --detach origin/{{github_default_branch}}
   cd "$WORKTREE_PATH"
   bd update {{issue}} --set-metadata work_dir="$WORKTREE_PATH"
@@ -364,8 +366,14 @@ fi
 PR_URL=$(bd show {{issue}} --json | jq -r '.metadata.github_fix_pr_url // empty')
 WORKTREE=$(bd show {{issue}} --json | jq -r '.metadata.work_dir // empty')
 if [ -n "$WORKTREE" ] && [ -d "$WORKTREE" ]; then
-  cd "$(dirname "$WORKTREE")"
-  git worktree remove "$WORKTREE" --force
+  GIT_COMMON_DIR=$(git -C "$WORKTREE" rev-parse --git-common-dir)
+  case "$GIT_COMMON_DIR" in
+    /*) ;;
+    *) GIT_COMMON_DIR="$WORKTREE/$GIT_COMMON_DIR" ;;
+  esac
+  CLEANUP_CWD=$(dirname "$GIT_COMMON_DIR")
+  cd "$CLEANUP_CWD" || exit 1
+  git --git-dir="$GIT_COMMON_DIR" worktree remove "$WORKTREE" --force
   bd update {{issue}} --unset-metadata work_dir
 fi
 CURRENT_NOTES=$(bd show {{issue}} --json | jq -r '.notes // empty')

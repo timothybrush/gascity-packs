@@ -1,0 +1,6 @@
+[order]
+description = "Refresh GitHub intake App configuration from the configured identity resolver"
+trigger = "cooldown"
+interval = "5m"
+exec = "$ORDER_DIR/scripts/github-intake-sync-app.sh"
+timeout = "2m"

@@ -1,0 +1,6 @@
+[order]
+description = "Reconcile GitHub addressed comments and dispatch addressed-message source beads"
+trigger = "cooldown"
+interval = "5m"
+exec = "$ORDER_DIR/scripts/github-addressed-message-router.sh"
+timeout = "10m"

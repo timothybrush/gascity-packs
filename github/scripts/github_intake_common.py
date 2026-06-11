@@ -7,9 +7,12 @@ import hmac
 import json
 import os
 import pathlib
+import re
+import shlex
 import subprocess
 import tempfile
 import time
+import tomllib
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -20,6 +23,8 @@ ADMIN_SERVICE_NAME = "github-admin"
 SCHEMA_VERSION = 1
 GITHUB_API_BASE = os.environ.get("GC_GITHUB_API_BASE", "https://api.github.com")
 GITHUB_API_VERSION = os.environ.get("GC_GITHUB_API_VERSION", "2026-03-10")
+GITHUB_APP_IDENTITY_SCHEMA_VERSION = "github-intake.github-app-identity.v1"
+GITHUB_APP_IDENTITY_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 
 
 class GitHubAPIError(RuntimeError):
@@ -71,8 +76,26 @@ def workflows_dir() -> str:
     return os.path.join(data_dir(), "workflows")
 
 
+def rule_results_dir() -> str:
+    return os.path.join(data_dir(), "rule-results")
+
+
+def address_results_dir() -> str:
+    return os.path.join(data_dir(), "address-results")
+
+
 def config_path() -> str:
     return os.path.join(data_dir(), "config.json")
+
+
+def rules_path() -> str:
+    override = os.environ.get("GC_GITHUB_INTAKE_RULES_FILE")
+    if override:
+        return os.path.expanduser(override)
+    root = city_root()
+    if not root:
+        return "config/github-intake/rules.toml"
+    return os.path.join(root, "config", "github-intake", "rules.toml")
 
 
 def published_services_dir() -> str:
@@ -86,7 +109,7 @@ def published_services_dir() -> str:
 
 
 def ensure_layout() -> None:
-    for path in (data_dir(), requests_dir(), deliveries_dir(), workflows_dir()):
+    for path in (data_dir(), requests_dir(), deliveries_dir(), workflows_dir(), rule_results_dir(), address_results_dir()):
         os.makedirs(path, exist_ok=True)
 
 
@@ -131,9 +154,47 @@ def normalize_config(raw: dict[str, Any] | None) -> dict[str, Any]:
     return cfg
 
 
+ENV_APP_FIELDS = {
+    "GITHUB_APP_ID": "app_id",
+    "GITHUB_APP_CLIENT_ID": "client_id",
+    "GITHUB_APP_CLIENT_SECRET": "client_secret",
+    "GITHUB_APP_WEBHOOK_SECRET": "webhook_secret",
+    "GITHUB_WEBHOOK_SECRET": "webhook_secret",
+    "GITHUB_APP_PRIVATE_KEY_PEM": "private_key_pem",
+    "GITHUB_APP_PRIVATE_KEY": "private_key_pem",
+    "GITHUB_APP_SLUG": "slug",
+    "GITHUB_APP_HTML_URL": "html_url",
+    "GITHUB_APP_NAME": "name",
+    "GITHUB_INSTALLATION_ID": "installation_id",
+}
+
+
+def app_config_from_env() -> dict[str, str]:
+    app: dict[str, str] = {}
+    for env_key, app_key in ENV_APP_FIELDS.items():
+        value = os.environ.get(env_key)
+        if value:
+            app[app_key] = value
+    return app
+
+
+def effective_config(config: dict[str, Any] | None) -> dict[str, Any]:
+    cfg = normalize_config(config)
+    env_app = app_config_from_env()
+    if env_app:
+        app = cfg.setdefault("app", {})
+        if isinstance(app, dict):
+            app.update(env_app)
+    return cfg
+
+
 def load_config() -> dict[str, Any]:
     ensure_layout()
     return normalize_config(read_json(config_path(), {}))
+
+
+def load_effective_config() -> dict[str, Any]:
+    return effective_config(load_config())
 
 
 def save_config(config: dict[str, Any]) -> dict[str, Any]:
@@ -162,7 +223,15 @@ def import_app_config(config: dict[str, Any], app_fields: dict[str, Any]) -> dic
     raw_id = app_fields.get("app_id", app_fields.get("id"))
     if raw_id is not None and raw_id != "":
         app["app_id"] = str(raw_id)
-    for key in ("client_id", "client_secret", "webhook_secret", "slug", "html_url", "name"):
+    for key in (
+        "client_id",
+        "client_secret",
+        "webhook_secret",
+        "slug",
+        "html_url",
+        "name",
+        "installation_id",
+    ):
         value = app_fields.get(key)
         if value:
             app[key] = value
@@ -177,6 +246,96 @@ def import_app_config(config: dict[str, Any], app_fields: dict[str, Any]) -> dic
 
 def normalize_repo_key(value: str) -> str:
     return value.strip().lower()
+
+
+def validate_github_app_identity(value: str, field: str = "github_app_identity") -> str:
+    identity = str(value).strip()
+    if not identity:
+        return ""
+    if not GITHUB_APP_IDENTITY_PATTERN.fullmatch(identity):
+        raise ValueError(
+            f"{field} must match [A-Za-z0-9][A-Za-z0-9._:-]{{0,127}}; got {identity!r}"
+        )
+    return identity
+
+
+def publish_identity(
+    app_fields: dict[str, Any],
+    identity: str = "",
+    publisher: str = "",
+    cwd: str = "",
+) -> dict[str, Any]:
+    """Push a GitHub App identity to the deployment secret store.
+
+    Write-side mirror of the identity resolver: runs the command configured
+    via GITHUB_INTAKE_IDENTITY_PUBLISHER with the identity name as its only
+    argument and the identity JSON document on stdin. The publisher is a
+    deployment plug — a no-op when unset — and failures are reported in the
+    returned status, never raised, so credential capture (manifest callback,
+    manual import) cannot be broken by a misbehaving store.
+    """
+    publisher = publisher.strip() or os.environ.get("GITHUB_INTAKE_IDENTITY_PUBLISHER", "").strip()
+    if not publisher:
+        return {"status": "skipped", "reason": "no publisher configured"}
+    identity = identity.strip() or os.environ.get("GITHUB_INTAKE_APP_IDENTITY", "").strip()
+    if not identity:
+        return {"status": "skipped", "reason": "GITHUB_INTAKE_APP_IDENTITY is not configured"}
+    try:
+        identity = validate_github_app_identity(identity, "GITHUB_INTAKE_APP_IDENTITY")
+    except ValueError as exc:
+        return {"status": "error", "detail": str(exc)}
+    command = shlex.split(publisher)
+    if not command:
+        return {"status": "error", "detail": "GITHUB_INTAKE_IDENTITY_PUBLISHER did not contain a command"}
+    payload = {
+        str(key): str(value)
+        for key, value in app_fields.items()
+        if value is not None and str(value) != ""
+    }
+    payload["schema_version"] = GITHUB_APP_IDENTITY_SCHEMA_VERSION
+    try:
+        result = subprocess.run(
+            [*command, identity],
+            input=json.dumps(payload, sort_keys=True),
+            capture_output=True,
+            text=True,
+            check=False,
+            cwd=cwd or city_root() or ".",
+            timeout=60,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return {"status": "error", "detail": str(exc)}
+    detail = (result.stderr or result.stdout or "").strip()[:1200]
+    if result.returncode != 0:
+        return {"status": "error", "detail": detail or f"exit {result.returncode}"}
+    return {"status": "published", "detail": detail}
+
+
+def github_repo_rig_name(repository_full_name: str) -> str:
+    repo_key = normalize_repo_key(repository_full_name)
+    owner, sep, repo = repo_key.partition("/")
+    if not sep or not owner or not repo:
+        return ""
+    slug = re.sub(r"[^a-z0-9_-]+", "-", f"github-{owner}-{repo}")
+    slug = re.sub(r"-+", "-", slug).strip("-")
+    return slug
+
+
+def github_repo_dispatch_rig(repository_full_name: str, rules_config: dict[str, Any] | None = None) -> str:
+    repo_key = normalize_repo_key(repository_full_name)
+    fallback = github_repo_rig_name(repo_key)
+    if not fallback:
+        return ""
+    repos = (rules_config if rules_config is not None else load_rules()).get("repos") or []
+    for repo in repos:
+        if not isinstance(repo, dict):
+            continue
+        if normalize_repo_key(str(repo.get("full_name", ""))) != repo_key:
+            continue
+        rig = str(repo.get("rig", "")).strip()
+        if rig:
+            return rig
+    return fallback
 
 
 def _set_command_formula(commands: dict[str, Any], name: str, formula: str | None) -> dict[str, Any]:
@@ -257,7 +416,7 @@ def build_manifest() -> dict[str, Any]:
         "redirect_url": admin.rstrip("/") + "/v0/github/app/manifest/callback",
         "callback_urls": [admin.rstrip("/") + "/v0/github/app/manifest/callback"],
         "setup_url": admin,
-        "description": "Workspace-hosted GitHub slash-command intake for Gas City",
+        "description": "Workspace-hosted GitHub comment and event intake for Gas City",
         "public": False,
         "default_permissions": {
             "contents": "write",
@@ -266,8 +425,237 @@ def build_manifest() -> dict[str, Any]:
         },
         "default_events": [
             "issue_comment",
+            "issues",
+            "pull_request",
         ],
     }
+
+
+def _flatten_match(prefix: str, value: Any, out: dict[str, str]) -> None:
+    if isinstance(value, dict):
+        for key, child in value.items():
+            dotted = f"{prefix}.{key}" if prefix else str(key)
+            _flatten_match(dotted, child, out)
+        return
+    out[prefix] = str(value)
+
+
+def normalize_rule(raw_rule: dict[str, Any], index: int) -> dict[str, Any]:
+    rule_id = str(raw_rule.get("id", "")).strip()
+    if not rule_id:
+        raise ValueError(f"rule[{index}]: id is required")
+    event = str(raw_rule.get("event", "")).strip()
+    if not event:
+        raise ValueError(f"rule {rule_id!r}: event is required")
+    raw_match = raw_rule.get("match") or {}
+    if not isinstance(raw_match, dict):
+        raise ValueError(f"rule {rule_id!r}: match must be a table")
+    match: dict[str, str] = {}
+    _flatten_match("", raw_match, match)
+    raw_actions = raw_rule.get("action") or []
+    if not isinstance(raw_actions, list) or not raw_actions:
+        raise ValueError(f"rule {rule_id!r}: at least one action is required")
+    actions: list[dict[str, Any]] = []
+    for action_index, raw_action in enumerate(raw_actions):
+        if not isinstance(raw_action, dict):
+            raise ValueError(f"rule {rule_id!r}: action[{action_index}] must be a table")
+        action_type = str(raw_action.get("type", "")).strip()
+        if not action_type:
+            raise ValueError(f"rule {rule_id!r}: action[{action_index}].type is required")
+        if action_type == "order" and not str(raw_action.get("name", "")).strip():
+            raise ValueError(f"rule {rule_id!r}: order action requires name")
+        actions.append(dict(raw_action))
+    return {
+        "id": rule_id,
+        "event": event,
+        "match": match,
+        "allow_self": bool(raw_rule.get("allow_self", False)),
+        "action": actions,
+    }
+
+
+def _normalized_unique_strings(values: Any) -> list[str]:
+    if not isinstance(values, list):
+        return []
+    out: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        normalized = str(value).strip().lower()
+        if normalized and normalized not in seen:
+            out.append(normalized)
+            seen.add(normalized)
+    return out
+
+
+def normalize_address(raw_address: dict[str, Any], repo_name: str, repo_rig: str, index: int) -> dict[str, Any]:
+    address = str(raw_address.get("address", "")).strip().lower()
+    if not address:
+        raise ValueError(f"repo {repo_name!r}: address[{index}].address is required")
+    pool = str(raw_address.get("pool", "")).strip()
+    if not pool:
+        raise ValueError(f"repo {repo_name!r}: address {address!r}: pool is required")
+    if "/" in pool:
+        raise ValueError(f"repo {repo_name!r}: address {address!r}: pool must not include a rig")
+    formula = str(raw_address.get("formula", "")).strip()
+    if not formula:
+        raise ValueError(f"repo {repo_name!r}: address {address!r}: formula is required")
+    profile = str(raw_address.get("profile", "")).strip() or address.lstrip("@")
+    identity = validate_github_app_identity(
+        str(raw_address.get("github_app_identity", "")),
+        f"repo {repo_name!r}: address {address!r}: github_app_identity",
+    )
+    return {
+        "address": address,
+        "pool": pool,
+        "target": f"{repo_rig}/{pool}",
+        "formula": formula,
+        "ack": bool(raw_address.get("ack", True)),
+        "profile": profile,
+        "github_app_identity": identity,
+        "installation_id": str(raw_address.get("installation_id", "")).strip(),
+    }
+
+
+def normalize_repo_addresses(raw_repo: dict[str, Any], index: int) -> dict[str, Any]:
+    full_name = normalize_repo_key(str(raw_repo.get("full_name", "")))
+    if not full_name:
+        raise ValueError(f"repo[{index}]: full_name is required")
+    github_rig = github_repo_rig_name(full_name)
+    if not github_rig:
+        raise ValueError(f"repo[{index}]: full_name must be owner/repo")
+    configured_rig = str(raw_repo.get("rig", "")).strip()
+    if configured_rig and "/" in configured_rig:
+        raise ValueError(f"repo {full_name!r}: rig must be a local rig name, not a target")
+    rig = configured_rig or github_rig
+    raw_addresses = raw_repo.get("address") or []
+    if not isinstance(raw_addresses, list):
+        raise ValueError(f"repo {full_name!r}: address must be an array of tables")
+    return {
+        "full_name": full_name,
+        "github_rig": github_rig,
+        "rig": rig,
+        "authorized_users": _normalized_unique_strings(raw_repo.get("authorized_users")),
+        "installation_id": str(raw_repo.get("installation_id", "")).strip(),
+        "addresses": [
+            normalize_address(raw_address, full_name, rig, address_index)
+            for address_index, raw_address in enumerate(raw_addresses)
+            if isinstance(raw_address, dict)
+        ],
+    }
+
+
+def load_rules() -> dict[str, Any]:
+    path = rules_path()
+    if not os.path.exists(path):
+        return {"version": 1, "path": path, "rules": [], "repos": []}
+    with open(path, "rb") as handle:
+        data = tomllib.load(handle)
+    if not isinstance(data, dict):
+        raise ValueError("rules root must be a TOML table")
+    if int(data.get("version", 0)) != 1:
+        raise ValueError("rules version must be 1")
+    raw_rules = data.get("rule") or []
+    if not isinstance(raw_rules, list):
+        raise ValueError("rule must be an array of tables")
+    raw_repos = data.get("repo") or []
+    if not isinstance(raw_repos, list):
+        raise ValueError("repo must be an array of tables")
+    return {
+        "version": 1,
+        "path": path,
+        "rules": [normalize_rule(raw_rule, index) for index, raw_rule in enumerate(raw_rules)],
+        "repos": [normalize_repo_addresses(raw_repo, index) for index, raw_repo in enumerate(raw_repos)],
+    }
+
+
+def payload_value(payload: dict[str, Any], dotted_path: str) -> Any:
+    current: Any = payload
+    for part in dotted_path.split("."):
+        if not isinstance(current, dict):
+            return None
+        current = current.get(part)
+    return current
+
+
+def rule_matches(rule: dict[str, Any], event: str, payload: dict[str, Any]) -> bool:
+    if str(rule.get("event", "")) != event:
+        return False
+    match = rule.get("match") or {}
+    if not isinstance(match, dict):
+        return False
+    for dotted_path, expected in match.items():
+        actual = payload_value(payload, str(dotted_path))
+        if str(actual) != str(expected):
+            return False
+    return True
+
+
+def matching_rules(event: str, payload: dict[str, Any], rules_config: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    rules = (rules_config or load_rules()).get("rules") or []
+    return [rule for rule in rules if isinstance(rule, dict) and rule_matches(rule, event, payload)]
+
+
+def rule_result_path(result_id: str) -> str:
+    return os.path.join(rule_results_dir(), f"{safe_storage_id(result_id, 'rule-result')}.json")
+
+
+def save_rule_result(payload: dict[str, Any]) -> dict[str, Any]:
+    ensure_layout()
+    result = copy.deepcopy(payload)
+    result["updated_at"] = utcnow()
+    atomic_write_json(rule_result_path(str(result["result_id"])), result)
+    return result
+
+
+def address_result_path(result_id: str) -> str:
+    return os.path.join(address_results_dir(), f"{safe_storage_id(result_id, 'address-result')}.json")
+
+
+def save_address_result(payload: dict[str, Any]) -> dict[str, Any]:
+    ensure_layout()
+    result = copy.deepcopy(payload)
+    result["updated_at"] = utcnow()
+    atomic_write_json(address_result_path(str(result["result_id"])), result)
+    return result
+
+
+def load_address_result(result_id: str) -> dict[str, Any] | None:
+    data = read_json(address_result_path(result_id))
+    if isinstance(data, dict):
+        return data
+    return None
+
+
+def list_recent_rule_results(limit: int = 20) -> list[dict[str, Any]]:
+    ensure_layout()
+    entries: list[dict[str, Any]] = []
+    paths = sorted(
+        pathlib.Path(rule_results_dir()).glob("*.json"),
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )[:limit]
+    for path in paths:
+        data = read_json(str(path))
+        if isinstance(data, dict):
+            entries.append(data)
+    entries.sort(key=lambda item: item.get("created_at", ""), reverse=True)
+    return entries[:limit]
+
+
+def list_recent_address_results(limit: int = 20) -> list[dict[str, Any]]:
+    ensure_layout()
+    entries: list[dict[str, Any]] = []
+    paths = sorted(
+        pathlib.Path(address_results_dir()).glob("*.json"),
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )[:limit]
+    for path in paths:
+        data = read_json(str(path))
+        if isinstance(data, dict):
+            entries.append(data)
+    entries.sort(key=lambda item: item.get("created_at", ""), reverse=True)
+    return entries[:limit]
 
 
 def parse_gc_command(body: str) -> dict[str, Any] | None:
@@ -319,6 +707,127 @@ def workflow_storage_id(value: str) -> str:
         return value
     digest = hashlib.sha256(value.encode("utf-8")).hexdigest()[:24]
     return f"workflow-{digest}"
+
+
+def address_token_pattern(address: str) -> re.Pattern[str]:
+    return re.compile(r"(?<![\w@])" + re.escape(address) + r"(?![\w-])", re.IGNORECASE)
+
+
+def clean_addressed_body(body: str, addresses: list[str]) -> str:
+    cleaned = body
+    for address in addresses:
+        cleaned = address_token_pattern(address).sub("", cleaned)
+    lines = [re.sub(r"[ \t]{2,}", " ", line).strip() for line in cleaned.splitlines()]
+    return "\n".join(lines).strip()
+
+
+def addressed_source_key(repository_id: str, comment_id: str, address: str) -> str:
+    return f"github-comment:{repository_id}:{comment_id}:{address.strip().lower()}"
+
+
+def extract_addressed_comment_requests(
+    payload: dict[str, Any], rules_config: dict[str, Any] | None = None
+) -> dict[str, Any] | None:
+    if payload.get("action") != "created":
+        return None
+    issue = payload.get("issue") or {}
+    comment = payload.get("comment") or {}
+    repository = payload.get("repository") or {}
+    if not isinstance(issue, dict) or not isinstance(comment, dict) or not isinstance(repository, dict):
+        return None
+    repo_name = normalize_repo_key(str(repository.get("full_name", "")))
+    repository_id = str(repository.get("id", "")).strip()
+    comment_id = str(comment.get("id", "")).strip()
+    issue_number = str(issue.get("number", "")).strip()
+    if not repo_name or not repository_id or not comment_id or not issue_number:
+        return None
+    repos = (rules_config or load_rules()).get("repos") or []
+    repo_cfg = next(
+        (
+            repo
+            for repo in repos
+            if isinstance(repo, dict) and normalize_repo_key(str(repo.get("full_name", ""))) == repo_name
+        ),
+        None,
+    )
+    if not repo_cfg:
+        return None
+    body = str(comment.get("body", ""))
+    addresses = [address for address in repo_cfg.get("addresses") or [] if isinstance(address, dict)]
+    matched: list[dict[str, Any]] = []
+    seen_addresses: set[str] = set()
+    for address_cfg in addresses:
+        address = str(address_cfg.get("address", "")).strip().lower()
+        if not address or address in seen_addresses:
+            continue
+        if address_token_pattern(address).search(body):
+            matched.append(address_cfg)
+            seen_addresses.add(address)
+    if not matched:
+        return None
+
+    matched_tokens = [str(address.get("address", "")).strip().lower() for address in matched]
+    cleaned_body = clean_addressed_body(body, matched_tokens)
+    sender = str((comment.get("user") or {}).get("login", "")).strip()
+    sender_key = sender.lower()
+    authorized_users = _normalized_unique_strings(repo_cfg.get("authorized_users"))
+    owner = repository.get("owner") or {}
+    item_kind = "pr" if issue.get("pull_request") else "issue"
+    rig = str(repo_cfg.get("rig") or github_repo_rig_name(repo_name))
+    base = {
+        "repository_id": repository_id,
+        "repository_full_name": repo_name,
+        "repository_owner": str(owner.get("login", "")),
+        "repository_name": str(repository.get("name", "")),
+        "repository_default_branch": str(repository.get("default_branch", "")),
+        "item_kind": item_kind,
+        "item_number": issue_number,
+        "item_url": str(issue.get("html_url", "")),
+        "issue_id": str(issue.get("id", "")),
+        "issue_number": issue_number,
+        "issue_title": str(issue.get("title", "")),
+        "issue_url": str(issue.get("html_url", "")),
+        "comment_id": comment_id,
+        "comment_body": body,
+        "comment_url": str(comment.get("html_url", "")),
+        "comment_author": sender,
+        "comment_author_type": str((comment.get("user") or {}).get("type", "")),
+        "comment_created_at": str(comment.get("created_at", "")),
+        "comment_updated_at": str(comment.get("updated_at", "")),
+        "installation_id": str((payload.get("installation") or {}).get("id", "")),
+        "cleaned_body": cleaned_body,
+    }
+    requests: list[dict[str, Any]] = []
+    for address_cfg in matched:
+        address = str(address_cfg.get("address", "")).strip().lower()
+        pool = str(address_cfg.get("pool", "")).strip()
+        target = str(address_cfg.get("target") or (f"{rig}/{pool}" if rig and pool else "")).strip()
+        profile = str(address_cfg.get("profile", "")).strip() or address.lstrip("@")
+        request = dict(base)
+        request.update(
+            {
+                "address": address,
+                "rig": rig,
+                "pool": pool,
+                "target": target,
+                "formula": str(address_cfg.get("formula", "")),
+                "ack": bool(address_cfg.get("ack", True)),
+                "profile": profile,
+                "profile_github_app_identity": str(address_cfg.get("github_app_identity", "")),
+                "profile_installation_id": str(address_cfg.get("installation_id", "")),
+                "source_key": addressed_source_key(repository_id, comment_id, address),
+            }
+        )
+        requests.append(request)
+    return {
+        "repository": repo_cfg,
+        "authorized": bool(sender_key and sender_key in authorized_users),
+        "authorized_users": authorized_users,
+        "sender": sender,
+        "addresses": matched_tokens,
+        "cleaned_body": cleaned_body,
+        "requests": requests,
+    }
 
 
 def extract_issue_comment_request(payload: dict[str, Any]) -> dict[str, Any] | None:
@@ -474,7 +983,13 @@ def find_request(repository_full_name: str, issue_number: str, command: str) -> 
 
 
 def build_status_snapshot(limit: int = 20) -> dict[str, Any]:
-    cfg = load_config()
+    cfg = load_effective_config()
+    rules_error = ""
+    try:
+        rules = load_rules()
+    except Exception as exc:  # noqa: BLE001
+        rules = {"version": 1, "path": rules_path(), "rules": []}
+        rules_error = str(exc)
     return {
         "service_name": current_service_name(),
         "city_root": city_root(),
@@ -483,7 +998,19 @@ def build_status_snapshot(limit: int = 20) -> dict[str, Any]:
         "webhook_url": webhook_url(),
         "published_services_dir": published_services_dir(),
         "config": redact_config(cfg),
+        "rules": {
+            "path": rules.get("path", rules_path()),
+            "count": len(rules.get("rules") or []),
+            "ids": [str(rule.get("id", "")) for rule in (rules.get("rules") or []) if isinstance(rule, dict)],
+            "address_repo_count": len(rules.get("repos") or []),
+            "address_count": sum(
+                len(repo.get("addresses") or []) for repo in (rules.get("repos") or []) if isinstance(repo, dict)
+            ),
+            "error": rules_error,
+        },
         "recent_requests": list_recent_requests(limit=limit),
+        "recent_rule_results": list_recent_rule_results(limit=limit),
+        "recent_address_results": list_recent_address_results(limit=limit),
     }
 
 

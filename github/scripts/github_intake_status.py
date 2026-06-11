@@ -48,6 +48,40 @@ def main() -> int:
     else:
         print("repository_mappings: (none)")
 
+    rules = snapshot.get("rules", {})
+    print("rules:")
+    print(f"  path: {rules.get('path', '(unknown)')}")
+    print(f"  count: {rules.get('count', 0)}")
+    print(f"  address_repo_count: {rules.get('address_repo_count', 0)}")
+    print(f"  address_count: {rules.get('address_count', 0)}")
+    if rules.get("error"):
+        print(f"  error: {rules.get('error')}")
+    ids = rules.get("ids") or []
+    if ids:
+        print("  ids:")
+        for rule_id in ids:
+            print(f"    - {rule_id}")
+
+    if snapshot.get("recent_rule_results"):
+        print("recent_rule_results:")
+        for item in snapshot["recent_rule_results"][:10]:
+            print(
+                f"  {item.get('result_id')} status={item.get('status')} "
+                f"rule={item.get('rule_id')} event={item.get('event')}"
+            )
+    else:
+        print("recent_rule_results: (none)")
+
+    if snapshot.get("recent_address_results"):
+        print("recent_address_results:")
+        for item in snapshot["recent_address_results"][:10]:
+            print(
+                f"  {item.get('result_id')} status={item.get('status')} "
+                f"reason={item.get('reason', '')} addresses={','.join(item.get('addresses') or [])}"
+            )
+    else:
+        print("recent_address_results: (none)")
+
     if snapshot["recent_requests"]:
         print("recent_requests:")
         for item in snapshot["recent_requests"][:10]:

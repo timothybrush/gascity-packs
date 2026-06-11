@@ -1,0 +1,189 @@
+description = """
+Generic GitHub addressed-message workflow.
+
+This formula is attached by github-intake when a configured repository address
+such as `@mayor` is mentioned in an issue or PR comment. The address maps to a
+configured pool; this formula gives the request-scoped worker normalized
+GitHub context without requiring it to parse webhook JSON.
+"""
+formula = "github-addressed-message"
+version = 1
+
+[vars]
+[vars.source_bead_id]
+description = "Addressed-message source bead id"
+required = true
+
+[vars.city_root]
+description = "City root that owns the addressed-message source bead and GitHub intake state"
+default = ""
+
+[vars.address]
+description = "Configured address token that matched the GitHub comment"
+required = true
+
+[vars.request_text]
+description = "Comment body after configured address tokens were removed"
+required = true
+
+[vars.github_repo]
+description = "Repository in owner/repo format"
+required = true
+
+[vars.github_issue_number]
+description = "GitHub issue or PR number for commenting back"
+required = true
+
+[vars.github_item_url]
+description = "GitHub issue or PR URL"
+required = true
+
+[vars.github_comment_url]
+description = "Triggering GitHub comment URL"
+required = true
+
+[vars.github_app_installation_id]
+description = "GitHub App installation id for the addressed profile comment identity"
+default = ""
+
+[vars.github_app_identity]
+description = "Credential identity for the addressed profile GitHub App"
+default = ""
+
+[vars.acknowledgement_requested]
+description = "Whether the handling session should post the acknowledgement comment"
+default = "true"
+
+[vars.github_sender]
+description = "GitHub username that posted the triggering comment"
+required = true
+
+[vars.external_source_key]
+description = "Canonical dedupe key for this addressed-message source"
+required = true
+
+[vars.raw_payload_path]
+description = "Path to the raw persisted GitHub payload when available"
+default = ""
+
+[[steps]]
+id = "handle-request"
+title = "Handle GitHub addressed request"
+description = """
+Handle the GitHub addressed-message request.
+
+## Source
+
+- Source bead: `{{source_bead_id}}`
+- Address: `{{address}}`
+- Requested by: `{{github_sender}}`
+- Repository: `{{github_repo}}`
+- Thread: {{github_item_url}}
+- Comment: {{github_comment_url}}
+- GitHub issue/PR number: `{{github_issue_number}}`
+- GitHub App installation: `{{github_app_installation_id}}`
+- GitHub App identity: `{{github_app_identity}}`
+- Acknowledgement requested: `{{acknowledgement_requested}}`
+- Source key: `{{external_source_key}}`
+- Raw payload: `{{raw_payload_path}}`
+
+## Request
+
+{{request_text}}
+
+## Working Rules
+
+Read the source bead before acting:
+
+```bash
+gc bd show {{source_bead_id}}
+```
+
+If `{{acknowledgement_requested}}` is not `false`, post the acknowledgement
+comment before other side effects. The webhook intentionally did not post this
+acknowledgement; the addressed handling session owns it so the comment is made
+by the same GitHub App profile handling the request.
+
+Post the acknowledgement exactly once:
+
+```bash
+if [ -n "{{city_root}}" ]; then
+  export GC_CITY_ROOT="{{city_root}}"
+fi
+SOURCE_JSON=$(gc bd show {{source_bead_id}} --json)
+ACKED=$(printf '%s' "$SOURCE_JSON" | jq -r '((if type == "array" then .[0] else . end).metadata // {})["addressed.ack_comment_id"] // empty')
+if [ "{{acknowledgement_requested}}" != "false" ] && [ -z "$ACKED" ]; then
+  BODY=$(mktemp)
+  cat >"$BODY" <<'EOF'
+Received `{{address}}` request as `{{source_bead_id}}`.
+
+I am handling it now and will follow up here with the result or blocker.
+
+Source request: {{github_comment_url}}
+EOF
+  COMMENT_ARGS=(github comment-issue "{{github_repo}}" "{{github_issue_number}}" --installation-id "{{github_app_installation_id}}" --body-file "$BODY")
+  if [ -n "{{github_app_identity}}" ]; then
+    COMMENT_ARGS+=(--github-app-identity "{{github_app_identity}}")
+  fi
+  COMMENT_JSON=$(gc "${COMMENT_ARGS[@]}")
+  COMMENT_ID=$(printf '%s' "$COMMENT_JSON" | jq -r '.id // empty')
+  COMMENT_URL=$(printf '%s' "$COMMENT_JSON" | jq -r '.html_url // empty')
+  if [ -n "$COMMENT_ID" ]; then
+    gc bd update {{source_bead_id}} \
+      --set-metadata addressed.ack_comment_id="$COMMENT_ID" \
+      --set-metadata addressed.ack_comment_url="$COMMENT_URL" \
+      --set-metadata addressed.acknowledged_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  fi
+  rm -f "$BODY"
+fi
+```
+
+Use the configured city tools and prompts to decide the next concrete action.
+If this request should start a workflow, create the appropriate durable work
+and record the result on `{{source_bead_id}}` or the current workflow bead.
+If the request is a codebase question, answer from repository evidence and cite
+the files or commands you inspected.
+
+## GitHub Response Contract
+
+The GitHub thread is the user-visible response channel. Before closing this
+workflow step, post one final response comment to {{github_item_url}} with the
+result, blocker, durable work IDs created, or dry-run plan. Dry-run requests still require a GitHub comment; do not treat in-session output as enough.
+
+Local session output, bead metadata, and in-session summaries are not completion.
+They are useful working notes, but the requester is waiting on the GitHub
+thread.
+
+Use the addressed profile identity for the final response:
+
+```bash
+if [ -n "{{city_root}}" ]; then
+  export GC_CITY_ROOT="{{city_root}}"
+fi
+RESPONSE_BODY=$(mktemp)
+cat >"$RESPONSE_BODY" <<'EOF'
+<write the final result, blocker, durable work IDs, or dry-run plan here>
+EOF
+RESPONSE_ARGS=(github comment-issue "{{github_repo}}" "{{github_issue_number}}" --installation-id "{{github_app_installation_id}}" --body-file "$RESPONSE_BODY")
+if [ -n "{{github_app_identity}}" ]; then
+  RESPONSE_ARGS+=(--github-app-identity "{{github_app_identity}}")
+fi
+RESPONSE_JSON=$(gc "${RESPONSE_ARGS[@]}")
+RESPONSE_ID=$(printf '%s' "$RESPONSE_JSON" | jq -r '.id // empty')
+RESPONSE_URL=$(printf '%s' "$RESPONSE_JSON" | jq -r '.html_url // empty')
+if [ -n "$RESPONSE_ID" ]; then
+  gc bd update {{source_bead_id}} \
+    --set-metadata addressed.response_comment_id="$RESPONSE_ID" \
+    --set-metadata addressed.response_comment_url="$RESPONSE_URL" \
+    --set-metadata addressed.responded_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+fi
+rm -f "$RESPONSE_BODY"
+```
+
+If posting the final GitHub comment fails, record the error on
+`{{source_bead_id}}` or the current workflow bead so operators can see that no
+GitHub response was delivered.
+
+Close this workflow step only after the GitHub final response comment succeeds,
+or after you have recorded the final-comment failure with the concrete error.
+"""
