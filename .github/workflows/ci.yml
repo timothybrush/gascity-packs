@@ -46,6 +46,9 @@ jobs:
             bash "$test_script"
           done
 
+      - name: Run root module embed tests
+        run: go test .
+
       - name: Run Slack full adapter tests
         working-directory: slack-full/adapter
         run: go test ./...
