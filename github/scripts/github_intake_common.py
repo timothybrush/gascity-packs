@@ -396,23 +396,65 @@ def published_service_url(service_name: str) -> str:
     return ""
 
 
+def workspace_env_value(name: str) -> str:
+    """Resolve a config knob from the process env, then city workspace.env.
+
+    Service processes do not inherit [workspace.env], so deployment knobs
+    must also be readable straight from city.toml.
+    """
+    value = os.environ.get(name, "").strip()
+    if value:
+        return value
+    root = city_root()
+    if not root:
+        return ""
+    try:
+        with open(os.path.join(root, "city.toml"), "rb") as handle:
+            data = tomllib.load(handle)
+    except (OSError, tomllib.TOMLDecodeError):
+        return ""
+    workspace = data.get("workspace") if isinstance(data, dict) else None
+    env = workspace.get("env") if isinstance(workspace, dict) else None
+    if isinstance(env, dict):
+        return str(env.get(name, "")).strip()
+    return ""
+
+
 def admin_url() -> str:
+    """Public admin URL: deployment override first, then gc publication.
+
+    Self-hosted cities have no gc publication provider; the override lets
+    them run the manifest onboarding flow behind their own edge or tunnel.
+    """
+    override = workspace_env_value("GITHUB_INTAKE_ADMIN_PUBLIC_URL")
+    if override:
+        return override
     return published_service_url(ADMIN_SERVICE_NAME)
 
 
 def webhook_url() -> str:
+    """Public webhook base URL: deployment override first, then publication."""
+    override = workspace_env_value("GITHUB_INTAKE_WEBHOOK_PUBLIC_URL")
+    if override:
+        return override
     return published_service_url(WEBHOOK_SERVICE_NAME)
 
 
 def build_manifest() -> dict[str, Any]:
     admin = admin_url()
     webhook = webhook_url()
-    if not admin or not webhook:
+    # GITHUB_INTAKE_WEBHOOK_HOOK_URL is the exact delivery URL placed in the
+    # manifest, for deployments whose edge uses a different path shape than
+    # the service-native /v0/github/webhook suffix.
+    hook_url = workspace_env_value("GITHUB_INTAKE_WEBHOOK_HOOK_URL")
+    if not admin or not (webhook or hook_url):
         raise ValueError("published admin and webhook URLs are required before building the GitHub App manifest")
+    if not hook_url:
+        hook_url = webhook.rstrip("/") + "/v0/github/webhook"
     return {
         "name": f"Gas City {city_name()} GitHub Intake",
         "url": admin,
-        "hook_attributes": {"url": webhook.rstrip("/") + "/v0/github/webhook", "active": True},
+        "hook_attributes": {"url": hook_url, "active": True},
         "redirect_url": admin.rstrip("/") + "/v0/github/app/manifest/callback",
         "callback_urls": [admin.rstrip("/") + "/v0/github/app/manifest/callback"],
         "setup_url": admin,

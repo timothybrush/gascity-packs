@@ -561,6 +561,60 @@ name = "triage-patrol"
             common.app_identifier({"client_id": "Iv1.only-client-id"})
 
 
+class GitHubIntakePublicUrlOverrideTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tempdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tempdir.cleanup)
+        self._old_environ = os.environ.copy()
+        os.environ["GC_CITY_ROOT"] = self.tempdir.name
+        for key in (
+            "GITHUB_INTAKE_ADMIN_PUBLIC_URL",
+            "GITHUB_INTAKE_WEBHOOK_PUBLIC_URL",
+            "GITHUB_INTAKE_WEBHOOK_HOOK_URL",
+        ):
+            os.environ.pop(key, None)
+
+    def tearDown(self) -> None:
+        os.environ.clear()
+        os.environ.update(self._old_environ)
+
+    def test_admin_and_webhook_env_overrides_win_over_snapshots(self) -> None:
+        os.environ["GITHUB_INTAKE_ADMIN_PUBLIC_URL"] = "https://admin.example/svc"
+        os.environ["GITHUB_INTAKE_WEBHOOK_PUBLIC_URL"] = "https://hooks.example/base"
+
+        self.assertEqual(common.admin_url(), "https://admin.example/svc")
+        self.assertEqual(common.webhook_url(), "https://hooks.example/base")
+
+    def test_overrides_resolve_from_city_workspace_env(self) -> None:
+        pathlib.Path(self.tempdir.name, "city.toml").write_text(
+            '[workspace]\n[workspace.env]\n'
+            'GITHUB_INTAKE_ADMIN_PUBLIC_URL = "https://admin.city/svc"\n'
+            'GITHUB_INTAKE_WEBHOOK_HOOK_URL = "https://hooks.city/me/github/webhook"\n',
+            encoding="utf-8",
+        )
+
+        self.assertEqual(common.admin_url(), "https://admin.city/svc")
+        manifest = common.build_manifest()
+        self.assertEqual(manifest["hook_attributes"]["url"], "https://hooks.city/me/github/webhook")
+        self.assertEqual(
+            manifest["redirect_url"],
+            "https://admin.city/svc/v0/github/app/manifest/callback",
+        )
+
+    def test_hook_url_override_used_verbatim_over_derived_path(self) -> None:
+        os.environ["GITHUB_INTAKE_ADMIN_PUBLIC_URL"] = "https://admin.example"
+        os.environ["GITHUB_INTAKE_WEBHOOK_PUBLIC_URL"] = "https://hooks.example/base"
+        os.environ["GITHUB_INTAKE_WEBHOOK_HOOK_URL"] = "https://edge.example/paxel-city/github/webhook"
+
+        manifest = common.build_manifest()
+
+        self.assertEqual(manifest["hook_attributes"]["url"], "https://edge.example/paxel-city/github/webhook")
+
+    def test_build_manifest_still_requires_some_urls(self) -> None:
+        with self.assertRaisesRegex(ValueError, "published admin and webhook URLs"):
+            common.build_manifest()
+
+
 class GitHubIntakePublishIdentityTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tempdir = tempfile.TemporaryDirectory()
