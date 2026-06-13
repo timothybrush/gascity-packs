@@ -1,0 +1,13 @@
+[pack]
+name = "runtime-cloudflare"
+version = "0.1.0"
+schema = 2
+
+# Pack-declared runtime (Gas City RUNTIME-SEL-011). gc resolves
+# session = "cloudflare" to this executable through the per-city runtime
+# registry, so the Cloudflare runtime ships and versions independently of
+# the gc binary. The command is a bare name resolved on PATH at session
+# start; `./install.sh` puts gc-runtime-cloudflare there via `go install`.
+[runtimes.cloudflare]
+command = "gc-runtime-cloudflare"
+protocol = 0
