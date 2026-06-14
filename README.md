@@ -11,6 +11,14 @@ this repo without forking.
 For the full model (cities, rigs, formulas, beads, runtime providers) see the
 [Gas City README](https://github.com/gastownhall/gascity).
 
+## Sponsors
+
+<p align="center">
+  <a href="https://blacksmith.sh/">
+    <img src="docs/images/blacksmith-powered.png" alt="Powered by Blacksmith" height="40">
+  </a>
+</p>
+
 ## Start here: first build in about ten minutes
 
 If you just installed Gas City and want a working multi-agent build factory,
@@ -193,3 +201,12 @@ rationale.
 
 Issues and pull requests are welcome. When a pack's surface changes, update
 its README in the same PR so the docs stay current with the code.
+
+Supported pack releases are also gated by the registry-driven compatibility
+smoke in `scripts/pack_release_compat.py` and the
+`Pack Release Compatibility` workflow. The `gascity` pack additionally has a
+model-backed formula gate in `scripts/gascity_pack_inference_gate.py` and the
+`Gascity Pack Inference` workflow. That gate exercises both the `review`
+formula and a `build-basic` code-writing fixture that must pass pytest. See
+[Release Compatibility Testing](./docs/design/release-compatibility-testing.md)
+for the release-time and nightly test contract.

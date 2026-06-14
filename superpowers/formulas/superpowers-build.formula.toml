@@ -62,14 +62,6 @@ expand = "superpowers-brainstorming"
 expand_vars = { brainstorming_approval_mode = "{{brainstorming_approval_mode}}" }
 description_file = "../assets/workflows/superpowers-build/requirements.md"
 
-[steps.check]
-max_attempts = 3
-
-[steps.check.check]
-mode = "exec"
-path = ".gc/scripts/checks/build-artifact-valid.sh"
-timeout = "5m"
-
 [[steps]]
 id = "plan"
 title = "Superpowers write plan"
@@ -147,14 +139,6 @@ expand = "superpowers-code-review"
 expand_vars = { implementation_target = "{{implementation_target}}" }
 description_file = "../assets/workflows/superpowers-build/review.md"
 
-[steps.check]
-max_attempts = 3
-
-[steps.check.check]
-mode = "exec"
-path = ".gc/scripts/checks/build-artifact-valid.sh"
-timeout = "5m"
-
 [[steps]]
 id = "finalize"
 title = "Superpowers finish branch"
@@ -169,4 +153,3 @@ max_attempts = 3
 mode = "exec"
 path = ".gc/scripts/checks/build-artifact-valid.sh"
 timeout = "5m"
-

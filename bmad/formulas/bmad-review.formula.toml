@@ -22,12 +22,3 @@ metadata = { "gc.run_target" = "bmad.bmad-review-synthesizer", "gc.build.artifac
 expand = "bmad-code-review-flow"
 expand_vars = { implementation_target = "{{implementation_target}}" }
 description_file = "../assets/workflows/bmad-review/write-report.md"
-
-[steps.check]
-max_attempts = 3
-
-[steps.check.check]
-mode = "exec"
-path = ".gc/scripts/checks/build-artifact-valid.sh"
-timeout = "5m"
-

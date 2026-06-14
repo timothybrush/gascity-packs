@@ -150,14 +150,6 @@ expand = "gstack-code-review"
 expand_vars = { implementation_target = "{{implementation_target}}", review_mode = "{{review_mode}}" }
 description_file = "../assets/workflows/gstack-build/review.md"
 
-[steps.check]
-max_attempts = 3
-
-[steps.check.check]
-mode = "exec"
-path = ".gc/scripts/checks/build-artifact-valid.sh"
-timeout = "5m"
-
 [[steps]]
 id = "finalize"
 title = "Finalize gstack sprint"
