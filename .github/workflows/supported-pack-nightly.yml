@@ -77,25 +77,45 @@ jobs:
       matrix:
         include:
           - pack: gascity
-            gate: all
-            timeout_minutes: 120
-            gate_timeout: 110m
+            gate: review
+            timeout_minutes: 45
+            gate_timeout: 30m
+          - pack: gascity
+            gate: build-basic
+            timeout_minutes: 110
+            gate_timeout: 90m
           - pack: superpowers
-            gate: all
-            timeout_minutes: 150
-            gate_timeout: 140m
+            gate: review
+            timeout_minutes: 60
+            gate_timeout: 45m
+          - pack: superpowers
+            gate: build
+            timeout_minutes: 120
+            gate_timeout: 100m
           - pack: compound-engineering
-            gate: all
-            timeout_minutes: 150
-            gate_timeout: 140m
+            gate: review
+            timeout_minutes: 60
+            gate_timeout: 45m
+          - pack: compound-engineering
+            gate: build
+            timeout_minutes: 120
+            gate_timeout: 100m
           - pack: gstack
-            gate: all
-            timeout_minutes: 180
-            gate_timeout: 170m
-          - pack: bmad
-            gate: all
+            gate: review
+            timeout_minutes: 75
+            gate_timeout: 60m
+          - pack: gstack
+            gate: build
             timeout_minutes: 150
-            gate_timeout: 140m
+            gate_timeout: 130m
+          - pack: bmad
+            gate: review
+            timeout_minutes: 60
+            gate_timeout: 45m
+          - pack: bmad
+            gate: build
+            timeout_minutes: 120
+            gate_timeout: 100m
           - pack: gastown
             gate: gastown-orchestration
             timeout_minutes: 120

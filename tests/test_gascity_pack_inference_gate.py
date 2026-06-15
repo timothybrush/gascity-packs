@@ -226,16 +226,22 @@ def test_supported_pack_nightly_workflow_uses_tier_c_ollama_shape_and_pack_matri
     assert "ANTHROPIC_API_KEY: ${{ secrets.OLLAMA_API_KEY }}" in workflow
     assert "ANTHROPIC_AUTH_TOKEN: ${{ secrets.OLLAMA_API_KEY }}" in workflow
     assert "OLLAMA_API_KEY: ${{ secrets.OLLAMA_API_KEY }}" in workflow
-    expected_timeouts = {
-        "gascity": "110m",
-        "superpowers": "140m",
-        "compound-engineering": "140m",
-        "gstack": "170m",
-        "bmad": "140m",
-        "gastown": "110m",
-    }
-    for pack, gate_timeout in expected_timeouts.items():
+    expected_entries = (
+        ("gascity", "review", "30m"),
+        ("gascity", "build-basic", "90m"),
+        ("superpowers", "review", "45m"),
+        ("superpowers", "build", "100m"),
+        ("compound-engineering", "review", "45m"),
+        ("compound-engineering", "build", "100m"),
+        ("gstack", "review", "60m"),
+        ("gstack", "build", "130m"),
+        ("bmad", "review", "45m"),
+        ("bmad", "build", "100m"),
+        ("gastown", "gastown-orchestration", "110m"),
+    )
+    for pack, gate, gate_timeout in expected_entries:
         assert f"- pack: {pack}" in workflow
+        assert f"gate: {gate}" in workflow
         assert f"gate_timeout: {gate_timeout}" in workflow
     assert '--pack "${{ matrix.pack }}"' in workflow
     assert '--gate "${{ matrix.gate }}"' in workflow
