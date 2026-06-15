@@ -370,6 +370,9 @@ THIRD_PARTY_BUILD_PACKS = {
             "review": "superpowers-code-review",
         },
         "review_expansion": "superpowers-code-review",
+        "code_review_entry_expand_vars": {
+            "artifact_path_keys": "gc.build.code_review_report_path,gc.build.review_report_path,gc.var.report_path",
+        },
         "gap_analysis_target": "superpowers.code-quality-reviewer",
         "review_fix_asset": "assets/workflows/superpowers-code-review/{target}.process-code-review.md",
         "prompt_assets": {
@@ -2030,7 +2033,12 @@ class FormulaAssetTests(unittest.TestCase):
                 expected_review_expand_vars = {
                     "implementation_target": "{{implementation_target}}",
                 }
-                expected_review_expand_vars.update(expected.get("review_expand_vars", {}))
+                expected_review_expand_vars.update(
+                    expected.get(
+                        "code_review_entry_expand_vars",
+                        expected.get("review_expand_vars", {}),
+                    )
+                )
                 self.assertEqual(
                     write_report["expand_vars"],
                     expected_review_expand_vars,
@@ -4184,6 +4192,22 @@ description = "Override sink that writes the base triage report contract."
             / "workflows"
             / "superpowers-code-review"
         )
+        expansion_formula = tomllib.loads(
+            (
+                packs_root
+                / "superpowers"
+                / "formulas"
+                / "superpowers-code-review.formula.toml"
+            ).read_text(encoding="utf-8")
+        )
+        review_formula = tomllib.loads(
+            (
+                packs_root
+                / "superpowers"
+                / "formulas"
+                / "superpowers-review.formula.toml"
+            ).read_text(encoding="utf-8")
+        )
         setup = (workflow_dir / "{target}.setup-superpowers-code-review.md").read_text(
             encoding="utf-8"
         )
@@ -4209,6 +4233,11 @@ description = "Override sink that writes the base triage report contract."
 
         self.assertIn("code_review.review_verdict", request)
         self.assertIn("code_review.review_report_path", request)
+        self.assertIn("valid for `gc.build.review.v1`", request)
+        self.assertIn("schema: gc.build.review.v1", request)
+        self.assertIn("producer:", request)
+        self.assertIn("stage: request-code-review", request)
+        self.assertIn("| ID | Status |", request)
         self.assertNotIn("code_review.verdict=done", request)
         self.assertNotIn("code_review.report_path=<", request)
 
@@ -4225,6 +4254,29 @@ description = "Override sink that writes the base triage report contract."
         self.assertIn("gc.build.code_review_status=approved", finalize)
         self.assertIn("gc.build.code_review_approved_at", finalize)
         self.assertIn("gc.build.code_review_status=failed", finalize)
+
+        artifact_keys = (
+            "gc.build.code_review_report_path,"
+            "gc.build.review_report_path,"
+            "gc.var.report_path"
+        )
+        self.assertEqual(
+            expansion_formula["vars"]["artifact_path_keys"]["default"],
+            artifact_keys,
+        )
+        write_report_step = next(
+            step
+            for step in review_formula["steps"]
+            if step["id"] == "write-report"
+        )
+        self.assertEqual(
+            write_report_step["metadata"]["gc.build.artifact_path_keys"],
+            artifact_keys,
+        )
+        self.assertEqual(
+            write_report_step["expand_vars"]["artifact_path_keys"],
+            artifact_keys,
+        )
 
 
 if __name__ == "__main__":

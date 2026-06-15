@@ -16,7 +16,7 @@ default = "superpowers.implementer"
 
 [vars.artifact_path_keys]
 description = "Comma-separated artifact metadata keys accepted by the terminal review report validator."
-default = "gc.build.review_report_path,gc.var.report_path"
+default = "gc.build.code_review_report_path,gc.build.review_report_path,gc.var.report_path"
 
 [[template]]
 id = "{target}.setup-superpowers-code-review"
