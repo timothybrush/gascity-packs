@@ -688,46 +688,62 @@ branch_has_real_change "origin/$TARGET" temp || \
   halt_false_completion "$BRANCH" "$(git merge-base "origin/$TARGET" temp 2>/dev/null || printf '%s' "origin/$TARGET")"
 ```
 
-**1. Merge and push target branch:**
-```bash
-git checkout $TARGET
-git merge --ff-only temp
-git push origin $TARGET
-```
+**1. Merge, push, verify, and close work bead:**
 
-**2. Verify push:**
-```bash
-git fetch origin
-LOCAL=$(git rev-parse $TARGET)
-REMOTE=$(git rev-parse origin/$TARGET)
-[ "$LOCAL" = "$REMOTE" ] || echo "PUSH FAILED — do not proceed"
-```
-If SHAs differ: STOP. Debug and retry. Do NOT continue.
-
-**3. Record merge metadata and close work bead:**
-
-Run as a single chained command so the metadata write cannot be skipped
-when the close-reason already names the SHA. Both the `--set-metadata`
-write and the `gc bd close` are required — `merged_sha` and
-`merged_target` are the only forensic breadcrumbs tying a closed bead
-to its merge commit on `$TARGET`. `--unset-metadata rejection_reason`
-clears any stale rejection field from an earlier rejected/reworked
-attempt before the successful close.
+Run this as one script. It uses a temporary detached worktree for the
+target branch because the real target branch may already be checked out in
+the rig's main worktree. Do not replace this with `git checkout $TARGET`.
+The metadata write happens only after the remote target ref is verified at
+the merged SHA.
 
 ```bash
-MERGED_SHA=$(git rev-parse HEAD) && \
-MERGED_SHORT=$(git rev-parse --short HEAD) && \
-gc bd update $WORK \
+set -e
+
+MERGE_PARENT=$(mktemp -d "${TMPDIR:-/tmp}/gascity-refinery-merge.XXXXXX")
+MERGE_WT="$MERGE_PARENT/target"
+cleanup_merge_wt() {
+  git worktree remove --force "$MERGE_WT" >/dev/null 2>&1 || true
+  rm -rf "$MERGE_PARENT"
+}
+trap cleanup_merge_wt EXIT
+
+git fetch origin "+refs/heads/${TARGET}:refs/remotes/origin/${TARGET}"
+TEMP_SHA=$(git rev-parse temp)
+git worktree add --detach "$MERGE_WT" "origin/$TARGET"
+git -C "$MERGE_WT" merge --ff-only "$TEMP_SHA"
+MERGED_SHA=$(git -C "$MERGE_WT" rev-parse HEAD)
+MERGED_SHORT=$(git -C "$MERGE_WT" rev-parse --short HEAD)
+git -C "$MERGE_WT" push origin "HEAD:$TARGET"
+
+git fetch origin "+refs/heads/${TARGET}:refs/remotes/origin/${TARGET}"
+REMOTE=$(git rev-parse "origin/$TARGET")
+if [ "$MERGED_SHA" != "$REMOTE" ]; then
+  echo "PUSH FAILED — origin/$TARGET is $REMOTE, want $MERGED_SHA. STOP. Do not mutate bead state."
+  gc runtime drain-ack
+  exit 1
+fi
+
+gc bd update "$WORK" \
   --set-metadata merge_result=merged \
-  --set-metadata merged_sha=$MERGED_SHA \
-  --set-metadata merged_target=$TARGET \
+  --set-metadata merged_sha="$MERGED_SHA" \
+  --set-metadata merged_target="$TARGET" \
   --unset-metadata rejection_reason && \
-gc bd close $WORK --reason "Merged to $TARGET at $MERGED_SHORT"
+gc bd close "$WORK" --reason "Merged to $TARGET at $MERGED_SHORT"
 ```
 
-**4. Cleanup:**
+If the script exits non-zero: STOP. Debug and retry. Do NOT write merge
+metadata, close the bead, or delete the source branch.
+
+Both the `--set-metadata` write and the `gc bd close` are required —
+`merged_sha` and `merged_target` are the only forensic breadcrumbs tying a
+closed bead to its merge commit on `$TARGET`. `--unset-metadata
+rejection_reason` clears any stale rejection field from an earlier
+rejected/reworked attempt before the successful close.
+
+**2. Cleanup:**
 ```bash
-git branch -d temp
+git checkout --detach "origin/$TARGET" >/dev/null 2>&1 || true
+git branch -d temp || git branch -D temp || true
 ```
 If delete_merged_branches = "true": `git push origin --delete $BRANCH`
 

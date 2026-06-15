@@ -130,10 +130,50 @@ test_composition_is_documented() {
         fail "pack.toml should not reference the retired maintenance pack import"
 }
 
+test_refinery_direct_merge_is_worktree_safe_and_fail_closed() {
+    local formula direct_block
+    formula="$GASTOWN/formulas/mol-refinery-patrol.toml"
+
+    direct_block=$(python3 - "$formula" <<'PY'
+import sys
+text = open(sys.argv[1], encoding="utf-8").read()
+start = text.index('**If MERGE_STRATEGY = "direct"')
+end = text.index('**If MERGE_STRATEGY = "mr"')
+print(text[start:end])
+PY
+)
+
+    [[ "$direct_block" == *'git worktree add --detach "$MERGE_WT" "origin/$TARGET"'* ]] ||
+        fail "direct refinery merge must use a detached target worktree"
+    [[ "$direct_block" == *'+refs/heads/${TARGET}:refs/remotes/origin/${TARGET}'* ]] ||
+        fail "direct refinery merge refspecs must brace TARGET for zsh-safe expansion"
+    [[ "$direct_block" == *'git -C "$MERGE_WT" push origin "HEAD:$TARGET"'* ]] ||
+        fail "direct refinery merge must push the verified merge worktree HEAD"
+    [[ "$direct_block" == *'[ "$MERGED_SHA" != "$REMOTE" ]'* ]] ||
+        fail "direct refinery merge must compare merged SHA to origin target"
+    [[ "$direct_block" == *'STOP. Do not mutate bead state.'* ]] ||
+        fail "direct refinery merge must fail closed before metadata writes"
+    ! printf '%s\n' "$direct_block" | grep -E '^[[:space:]]*git checkout \$TARGET([[:space:]]|$)' >/dev/null ||
+        fail "direct refinery merge must not checkout target branch in the active worktree"
+
+    python3 - "$formula" <<'PY' || fail "direct refinery merge must verify origin before setting merged metadata"
+import sys
+text = open(sys.argv[1], encoding="utf-8").read()
+start = text.index('**If MERGE_STRATEGY = "direct"')
+end = text.index('**If MERGE_STRATEGY = "mr"')
+block = text[start:end]
+verify = block.index('[ "$MERGED_SHA" != "$REMOTE" ]')
+metadata = block.index('--set-metadata merge_result=merged')
+if verify >= metadata:
+    raise SystemExit(1)
+PY
+}
+
 test_dog_assets_are_pack_local
 test_retired_dog_formulas_are_not_reintroduced
 test_shutdown_dance_contracts_are_executable
 test_shutdown_dance_lifecycle_and_audit_contracts
 test_composition_is_documented
+test_refinery_direct_merge_is_worktree_safe_and_fail_closed
 
 echo "gastown pack asset tests passed"
