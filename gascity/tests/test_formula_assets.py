@@ -3643,6 +3643,49 @@ description = "Override sink that writes the base triage report contract."
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("Implementation review approved from lane verdicts", result.stdout)
 
+    def test_implementation_review_check_accepts_resolved_critical_findings(self) -> None:
+        show_json = """[
+  {
+    "id": "loop",
+    "metadata": {
+      "gc.root_bead_id": "root",
+      "gc.step_id": "superpowers-review.write-report.superpowers-code-review-loop"
+    }
+  }
+]"""
+        list_json = """[
+  {
+    "id": "review-fixes",
+    "metadata": {
+      "gc.root_bead_id": "root",
+      "gc.attempt": "1",
+      "gc.ralph_step_id": "superpowers-review.write-report.superpowers-code-review-loop",
+      "code_review.verdict": "done",
+      "code_review.report_path": "review-fix-summary.md"
+    }
+  }
+]"""
+
+        with tempfile.TemporaryDirectory() as td:
+            work_dir = pathlib.Path(td)
+            (work_dir / "review-fix-summary.md").write_text(
+                "# Review Fix Summary\n\n"
+                "## Findings\n\n"
+                "### [ALREADY RESOLVED] R-001\n\n"
+                "**Severity**: Critical\n\n"
+                "The critical command-injection finding was fixed and verified.\n",
+                encoding="utf-8",
+            )
+
+            result = self._run_implementation_review_check(
+                show_json=show_json,
+                list_json=list_json,
+                extra_env={"GC_WORK_DIR": str(work_dir)},
+            )
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("Implementation review approved", result.stdout)
+
     def test_implementation_review_check_rejects_incomplete_build_basic_lanes(self) -> None:
         show_json = """[
   {

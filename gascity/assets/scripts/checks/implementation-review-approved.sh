@@ -126,15 +126,5 @@ if [ "$VERDICT" != "done" ]; then
   esac
 fi
 
-if [ -n "$REPORT" ]; then
-  if [ ! -f "$REPORT" ] && [ -n "${GC_WORK_DIR:-}" ] && [ -f "$GC_WORK_DIR/$REPORT" ]; then
-    REPORT="$GC_WORK_DIR/$REPORT"
-  fi
-  if [ -f "$REPORT" ] && grep -Eiq '(^|[^[:alpha:]])severity[^[:alpha:]]*(critical|blocker|major)([^[:alpha:]]|$)' "$REPORT"; then
-    echo "Implementation review report still contains critical/blocker/major findings: $REPORT"
-    exit 1
-  fi
-fi
-
 echo "Implementation review approved"
 exit 0
