@@ -1,0 +1,2 @@
+description = 'python3 3.11+ is available for the gc slack helper commands'
+run = '../check-python.sh'

@@ -1,0 +1,2 @@
+description = 'required Slack adapter env vars are set or present in the adapter env file'
+run = '../check-env.sh'

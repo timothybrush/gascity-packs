@@ -1,0 +1,2 @@
+description = 'public ingress (Tailscale Funnel) reaches the adapter /slack/events listener'
+run = '../check-funnel.sh'

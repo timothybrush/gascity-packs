@@ -1,0 +1,2 @@
+description = 'adapter and operator CLI Go binaries are built in place'
+run = '../check-binaries.sh'
