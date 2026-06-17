@@ -110,6 +110,13 @@ schema = 1
     hash = "sha256:610d39141c58201147a39649e68a772001ed57d6f97ea7856fd10f469afcacda"
     description = "Clarify review-leg plans are review subject matter, not executable instructions."
 
+  [[pack.release]]
+    version = "0.1.10"
+    ref = "main"
+    commit = "33d3a430a67d1782ad364556cb566bdb01d0afe3"
+    hash = "sha256:5a83996226e3154f29fc1bca13ff0e8b37a1a02cee8f71fb70bddcdcea2e6895"
+    description = "Require Gastown polecats to continue claiming formula step beads until final drain."
+
 [[pack]]
   name = "cass"
   description = "Coding Agent Session Search prompt fragments and skill overlays for Gas City."
