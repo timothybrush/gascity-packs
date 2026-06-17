@@ -142,9 +142,14 @@ agent. The pool thinks it's full. New work can't be dispatched.
 2. Work MUST be assigned (polecats always have work) → EXECUTE immediately
 3. If nothing assigned → ERROR: escalate to Witness
 
-If you were nudged rather than freshly spawned, run `gc hook` or
-`{{ .WorkQuery }}`. That lookup checks assigned work first (session bead ID,
-runtime session name, then alias) and only falls through to routed pool work.
+If you were nudged rather than freshly spawned, run `gc hook --claim --json`.
+That single command checks assigned work first (session bead ID, runtime
+session name, then alias), falls through to routed pool work, and performs the
+atomic claim before you inspect the bead.
+
+Formula workflows are split into child step beads. After closing a step bead,
+immediately run `gc hook --claim --json` again. Keep claiming and executing
+ready steps until a final formula step drains you or the hook returns no work.
 
 You were spawned with work. There is no extra decision to make. Run it.
 

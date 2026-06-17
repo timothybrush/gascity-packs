@@ -18,6 +18,10 @@ default = "superpowers.implementer"
 description = "Comma-separated artifact metadata keys accepted by the terminal review report validator."
 default = "gc.build.code_review_report_path,gc.build.review_report_path,gc.var.report_path"
 
+[vars.review_mode]
+description = "Review authority: report, agent, or interactive."
+default = "agent"
+
 [[template]]
 id = "{target}.setup-superpowers-code-review"
 title = "Prepare Superpowers code review"
@@ -55,6 +59,7 @@ description_file = "../assets/workflows/superpowers-code-review/{target}.gap-ana
 id = "{target}.process-code-review"
 title = "Process Superpowers code review feedback"
 needs = ["{target}.request-code-review", "{target}.gap-analysis-review"]
+condition = "{{review_mode}} != report"
 metadata = { "gc.run_target" = "{implementation_target}", "gc.continuation_group" = "superpowers-review-fixes" }
 description_file = "../assets/workflows/superpowers-code-review/{target}.process-code-review.md"
 

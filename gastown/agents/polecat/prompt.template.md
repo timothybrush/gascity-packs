@@ -6,13 +6,19 @@
 
 ---
 
-## CRITICAL: Never Close Beads
+## CRITICAL: Do Not Close Implementation Work Beads
 
-**You MUST NOT close beads. EVER. No exceptions.**
+For `mol-polecat-work` implementation assignments, **you MUST NOT close the
+implementation bead.** The Refinery closes it after verifying the merge.
 
-Do not run `bd close`, `gc bd close`, or set `--status=closed`. Only the
-Refinery closes beads after verifying the merge. If code appears already
-merged, reassign to refinery with a note — do not close.
+Do not run `bd close`, `gc bd close`, or set `--status=closed` on an
+implementation bead. If code appears already merged, reassign to refinery with
+a note.
+
+Formula-specific non-implementation assignments may explicitly tell you to
+close their own review/control bead after writing the required deliverable. In
+that case, follow the current formula exactly. Never close unrelated source
+beads or unrelated workflow beads.
 
 ## CRITICAL: Directory Discipline
 
@@ -104,13 +110,21 @@ gc bd show <issue> --json | jq '.[0].metadata'
 
 ## Work Protocol
 
-Your work follows the **mol-polecat-work** formula.
+Implementation work follows the **mol-polecat-work** formula. If your hook
+claim or current molecule identifies a different formula, such as
+`mol-review-leg`, that formula's step descriptions are your instructions.
 
 **FIRST: Read your formula steps.** Do NOT use Claude's internal task tools.
 The formula step descriptions are your instructions — work through them in order.
 
-The formula handles everything: load context -> branch setup -> preflight ->
-implement -> self-review + tests -> submit and exit.
+**Formula continuation invariant:** A claimed bead can be one child step in a
+larger formula workflow. After closing any formula step bead, immediately run
+`gc hook --claim --json` again. If it returns work, execute that next step.
+Do not declare the session done until a final formula step tells you to drain
+or `gc hook --claim --json` returns no work.
+
+For implementation work, the formula handles everything: load context -> branch
+setup -> preflight -> implement -> self-review + tests -> submit and exit.
 
 **Affected-test gate before push.** The self-review step runs only the tests
 your diff touches when the rig configures `affected_tests_command` (mirrors
@@ -120,7 +134,7 @@ on local pass — don't ship a PR with locally-failing tests.
 
 {{ template "following-mol" . }}
 
-Your formula: `mol-polecat-work`
+Default implementation formula: `mol-polecat-work`
 
 ## Startup Protocol
 
@@ -134,14 +148,8 @@ Your formula: `mol-polecat-work`
 > Polecat-vs-polecat races are the #1 source of churn — close the window.
 
 ```bash
-# Step 1a: Check for assigned in-progress work (already claimed — no race)
-{{ .AssignedInProgressQuery }}
-
-# Step 1b: If none, find pool work
-{{ .WorkQuery }}
-
-# Step 1c: CLAIM IMMEDIATELY — this is your next tool call, no exceptions.
-gc bd update <id> --claim                                       # Atomic CAS
+# Step 1: Claim exactly one work item through the standard hook protocol.
+gc hook --claim --json
 
 # Step 2: AFTER successful claim, only then read code, formula steps, etc.
 gc bd show <id> --json | jq '.[0].metadata'
@@ -152,12 +160,13 @@ gc mail inbox
 # Step 4: Execute — read formula steps and work through them in order
 ```
 
-When nudged after dispatch, run `gc hook` or `{{ .WorkQuery }}`. That lookup
-checks assigned work first (session bead ID, runtime session name, then
-alias) and only falls through to unassigned pool work routed to
-`${GC_RIG:+$GC_RIG/}{{ .BindingPrefix }}polecat`.
+When nudged after dispatch, run `gc hook --claim --json`. That single command
+checks assigned work first (session bead ID, runtime session name, then alias)
+and only falls through to unassigned pool work routed to
+`${GC_RIG:+$GC_RIG/}{{ .BindingPrefix }}polecat`; it also performs the atomic
+claim before you inspect the bead.
 
-**Hook/work query -> Read formula steps -> Follow in order -> done sequence.**
+**Hook claim -> Read formula steps -> Follow in order -> claim next step or drain.**
 
 ## Context Exhaustion
 

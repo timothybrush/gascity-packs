@@ -552,7 +552,6 @@ def make_pack_specs() -> dict[str, PackSpec]:
             required_review_routes=(
                 "superpowers.code-reviewer",
                 "superpowers.code-quality-reviewer",
-                "superpowers.implementer",
             ),
             required_build_routes=(
                 "superpowers.brainstorming",
@@ -581,7 +580,6 @@ def make_pack_specs() -> dict[str, PackSpec]:
                 "compound-engineering.ce-testing-reviewer",
                 "compound-engineering.ce-maintainability-reviewer",
                 "compound-engineering.ce-code-review-synthesizer",
-                "compound-engineering.ce-work",
             ),
             required_build_routes=(
                 "compound-engineering.ce-brainstorm",
@@ -607,7 +605,6 @@ def make_pack_specs() -> dict[str, PackSpec]:
                 "gstack.qa-lead",
                 "gstack.security-officer",
                 "gstack.review-synthesizer",
-                "gstack.implementer",
             ),
             required_build_routes=(
                 "gstack.office-hours",
@@ -636,7 +633,6 @@ def make_pack_specs() -> dict[str, PackSpec]:
                 "bmad.acceptance-auditor",
                 "bmad.story-self-checker",
                 "bmad.bmad-review-synthesizer",
-                "bmad.story-implementer",
             ),
             required_build_routes=(
                 "bmad.prd-writer",
@@ -2126,7 +2122,9 @@ def gastown_review_assignment_description() -> str:
     return """\
 Run a bounded Gastown orchestration review-leg gate.
 
-Review the following tiny release-gate plan:
+Review the following tiny release-gate plan as written. Do not execute the
+plan, start another city, spawn sessions, or route extra work; the numbered
+steps are the subject of the review.
 
 1. Start a disposable Gastown city.
 2. Require mayor, deacon, boot, and witness sessions to exist after startup.

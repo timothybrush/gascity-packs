@@ -27,6 +27,10 @@ PARENT_ROOT="$(metadata_value "$ROOT_JSON" "gc.root_bead_id")"
 if [ -z "$PARENT_ROOT" ]; then
   PARENT_ROOT="$ROOT_ID"
 fi
+PARENT_JSON="$ROOT_JSON"
+if [ "$PARENT_ROOT" != "$ROOT_ID" ]; then
+  PARENT_JSON="$(bd show "$PARENT_ROOT" --json 2>/dev/null || true)"
+fi
 STEP_ID="$(metadata_value "$ROOT_JSON" "gc.step_id")"
 SCOPE_REF="$(metadata_value "$ROOT_JSON" "gc.scope_ref")"
 if [ -z "$SCOPE_REF" ]; then
@@ -52,6 +56,41 @@ REPORT="$(printf '%s\n' "$MATCHES" | jq -r --arg attempt "$ATTEMPT" '
     | .metadata["code_review.report_path"]
   ] | last // ""
 ' 2>/dev/null)"
+
+REVIEW_MODE="$(metadata_value "$ROOT_JSON" "gc.var.review_mode")"
+if [ -z "$REVIEW_MODE" ]; then
+  REVIEW_MODE="$(metadata_value "$PARENT_JSON" "gc.var.review_mode")"
+fi
+if [ "$REVIEW_MODE" = "report" ]; then
+  REPORT_MODE_PATH="$(metadata_value "$PARENT_JSON" "gc.build.code_review_report_path")"
+  if [ -z "$REPORT_MODE_PATH" ]; then
+    REPORT_MODE_PATH="$(metadata_value "$PARENT_JSON" "gc.build.review_report_path")"
+  fi
+  if [ -z "$REPORT_MODE_PATH" ]; then
+    REPORT_MODE_PATH="$(metadata_value "$PARENT_JSON" "gc.var.report_path")"
+  fi
+  if [ -z "$REPORT_MODE_PATH" ]; then
+    REPORT_MODE_PATH="$(printf '%s\n' "$MATCHES" | jq -r --arg attempt "$ATTEMPT" '
+      [
+        .[]
+        | select((.metadata["gc.attempt"] // "") == $attempt)
+        | (
+            .metadata["code_review.review_report_path"] //
+            .metadata["code_review.report_path"] //
+            .metadata["code_review.output_path"] //
+            ""
+          )
+        | select(. != "")
+      ] | last // ""
+    ' 2>/dev/null)"
+  fi
+  if [ -n "$REPORT_MODE_PATH" ]; then
+    echo "Implementation review report mode satisfied: $REPORT_MODE_PATH"
+    exit 0
+  fi
+  echo "Implementation review report mode needs a review report path"
+  exit 1
+fi
 
 LANE_STATUS="$(printf '%s\n' "$MATCHES" | jq -r \
   --arg root "$PARENT_ROOT" \
