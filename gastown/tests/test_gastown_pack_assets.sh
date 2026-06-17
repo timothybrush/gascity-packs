@@ -142,6 +142,10 @@ test_polecat_startup_uses_standard_hook_claim() {
         fail "polecat prompt should call the standard hook claim path"
     grep -F 'gc hook --claim --json' "$propulsion" >/dev/null ||
         fail "polecat propulsion fragment should call the standard hook claim path"
+    grep -F 'After closing any formula step bead, immediately run' "$prompt" >/dev/null ||
+        fail "polecat prompt must require hook continuation after each formula step"
+    grep -F 'After closing a step bead,' "$propulsion" >/dev/null ||
+        fail "polecat propulsion fragment must require hook continuation after each formula step"
     ! grep -F 'run `gc hook` or' "$prompt" >/dev/null ||
         fail "polecat prompt must not regress to an unclaimed hook/work-query choice"
     ! grep -F 'run `gc hook` or' "$propulsion" >/dev/null ||

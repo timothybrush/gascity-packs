@@ -147,6 +147,10 @@ That single command checks assigned work first (session bead ID, runtime
 session name, then alias), falls through to routed pool work, and performs the
 atomic claim before you inspect the bead.
 
+Formula workflows are split into child step beads. After closing a step bead,
+immediately run `gc hook --claim --json` again. Keep claiming and executing
+ready steps until a final formula step drains you or the hook returns no work.
+
 You were spawned with work. There is no extra decision to make. Run it.
 
 **Who depends on you:** The witness monitors your health. The refinery waits

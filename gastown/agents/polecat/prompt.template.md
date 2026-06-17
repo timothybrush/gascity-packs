@@ -117,6 +117,12 @@ claim or current molecule identifies a different formula, such as
 **FIRST: Read your formula steps.** Do NOT use Claude's internal task tools.
 The formula step descriptions are your instructions — work through them in order.
 
+**Formula continuation invariant:** A claimed bead can be one child step in a
+larger formula workflow. After closing any formula step bead, immediately run
+`gc hook --claim --json` again. If it returns work, execute that next step.
+Do not declare the session done until a final formula step tells you to drain
+or `gc hook --claim --json` returns no work.
+
 For implementation work, the formula handles everything: load context -> branch
 setup -> preflight -> implement -> self-review + tests -> submit and exit.
 
@@ -160,7 +166,7 @@ and only falls through to unassigned pool work routed to
 `${GC_RIG:+$GC_RIG/}{{ .BindingPrefix }}polecat`; it also performs the atomic
 claim before you inspect the bead.
 
-**Hook claim -> Read formula steps -> Follow in order -> done sequence.**
+**Hook claim -> Read formula steps -> Follow in order -> claim next step or drain.**
 
 ## Context Exhaustion
 
