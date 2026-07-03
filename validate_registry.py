@@ -240,10 +240,179 @@ def validate(path: Path) -> list[str]:
     return errors
 
 
+def resolve_commit(root: Path, ref: str) -> str:
+    """Resolve a git ref to its full 40-char lowercase commit SHA."""
+    return git_bytes(root, "rev-parse", "--verify", f"{ref}^{{commit}}").decode("utf-8").strip()
+
+
+def _toml_escape(value: str) -> str:
+    """Escape a string for embedding in a TOML basic (double-quoted) string."""
+    result = []
+    for ch in value:
+        if ch == "\\":
+            result.append("\\\\")
+        elif ch == '"':
+            result.append('\\"')
+        elif ch == "\n":
+            result.append("\\n")
+        elif ch == "\r":
+            result.append("\\r")
+        elif ch == "\t":
+            result.append("\\t")
+        elif ord(ch) < 0x20 or ord(ch) == 0x7F:
+            raise ValueError(f"control character U+{ord(ch):04X} in field value")
+        else:
+            result.append(ch)
+    return "".join(result)
+
+
+def compute_pack_hash(root: Path, pack_path: str, commit: str) -> str:
+    """Compute the canonical content hash for a pack at a commit.
+
+    Wraps git_pack_content_hash with a clear error when the pack is absent at
+    that commit, so callers minting a registry entry fail loudly instead of
+    emitting a null hash.
+    """
+    digest = git_pack_content_hash(root, commit, pack_path)
+    if digest is None:
+        raise ValueError(f"pack {pack_path!r} not found at commit {commit}")
+    return digest
+
+
+def render_pack_entry(
+    *,
+    name: str,
+    description: str,
+    source: str,
+    version: str,
+    ref: str,
+    commit: str,
+    content_hash: str,
+    release_description: str,
+) -> str:
+    """Render a ready-to-paste [[pack]] block matching registry.toml style."""
+    return (
+        "[[pack]]\n"
+        f'name = "{_toml_escape(name)}"\n'
+        f'description = "{_toml_escape(description)}"\n'
+        f'source = "{_toml_escape(source)}"\n'
+        'source_kind = "git"\n'
+        "\n"
+        "  [[pack.release]]\n"
+        f'  version = "{_toml_escape(version)}"\n'
+        f'  ref = "{_toml_escape(ref)}"\n'
+        f'  commit = "{commit}"\n'
+        f'  hash = "{content_hash}"\n'
+        f'  description = "{_toml_escape(release_description)}"\n'
+    )
+
+
+def _pack_toml_name(root: Path, pack: str) -> str:
+    if not PACK_NAME_RE.fullmatch(pack):
+        raise ValueError(f"invalid pack name {pack!r}")
+    pack_toml = root / pack / "pack.toml"
+    if not pack_toml.exists():
+        raise ValueError(f"{pack}/pack.toml not found in working tree")
+    with pack_toml.open("rb") as handle:
+        name = tomllib.load(handle).get("pack", {}).get("name")
+    if not name:
+        raise ValueError(f"{pack}/pack.toml has no [pack].name key")
+    return name
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("registry", nargs="?", default="registry.toml")
+    parser.add_argument(
+        "--compute",
+        metavar="PACK",
+        help="compute and print the content hash for PACK at --commit, then exit",
+    )
+    parser.add_argument(
+        "--emit-entry",
+        metavar="PACK",
+        help="print a ready-to-paste [[pack]] registry block for PACK, then exit",
+    )
+    parser.add_argument(
+        "--commit",
+        default="HEAD",
+        metavar="REF",
+        help="commit-ish whose pack content is hashed/pinned (default: HEAD)",
+    )
+    parser.add_argument(
+        "--ref",
+        default="main",
+        metavar="REF",
+        help="git ref label for the source URL and release ref field (default: main)",
+    )
+    parser.add_argument(
+        "--repo-url",
+        default="https://github.com/gastownhall/gascity-packs",
+        help="repository base URL for the source field of --emit-entry",
+    )
+    parser.add_argument("--version", help="release version for --emit-entry (semver)")
+    parser.add_argument(
+        "--pack-description", help="catalog description for --emit-entry"
+    )
+    parser.add_argument(
+        "--release-description", help="release description for --emit-entry"
+    )
     args = parser.parse_args()
+
+    root = Path(args.registry).resolve().parent
+
+    if args.compute and args.emit_entry:
+        print("--compute and --emit-entry are mutually exclusive", file=sys.stderr)
+        return 2
+
+    if args.compute:
+        if not PACK_NAME_RE.fullmatch(args.compute):
+            print(f"compute failed: invalid pack name {args.compute!r}", file=sys.stderr)
+            return 1
+        try:
+            commit = resolve_commit(root, args.commit)
+            print(compute_pack_hash(root, args.compute, commit))
+        except (ValueError, subprocess.CalledProcessError) as exc:
+            print(f"compute failed: {exc}", file=sys.stderr)
+            return 1
+        return 0
+
+    if args.emit_entry:
+        pack = args.emit_entry
+        problems = []
+        if not args.version or not RELEASE_VERSION_RE.fullmatch(args.version):
+            problems.append("--version must be semver major.minor[.patch]")
+        if not args.pack_description:
+            problems.append("--pack-description is required")
+        if not args.release_description:
+            problems.append("--release-description is required")
+        if problems:
+            for problem in problems:
+                print(f"emit-entry failed: {problem}", file=sys.stderr)
+            return 2
+        try:
+            actual_name = _pack_toml_name(root, pack)
+            if actual_name != pack:
+                raise ValueError(
+                    f"{pack}/pack.toml name {actual_name!r} does not match {pack!r}"
+                )
+            commit = resolve_commit(root, args.commit)
+            content_hash = compute_pack_hash(root, pack, commit)
+            entry = render_pack_entry(
+                name=pack,
+                description=args.pack_description,
+                source=f"{args.repo_url.rstrip('/')}/tree/{args.ref}/{pack}",
+                version=args.version,
+                ref=args.ref,
+                commit=commit,
+                content_hash=content_hash,
+                release_description=args.release_description,
+            )
+        except (ValueError, subprocess.CalledProcessError) as exc:
+            print(f"emit-entry failed: {exc}", file=sys.stderr)
+            return 1
+        print(entry, end="")
+        return 0
 
     errors = validate(Path(args.registry))
     if errors:
