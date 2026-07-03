@@ -410,13 +410,18 @@ def find_latest_inbound_message_id_for_session(
     The lookup chain:
       1. Find the latest extmsg.inbound event targeting this session.
       2. Read its conversation_id from the event payload.
-      3. Query the transcript for that conversation, find the latest entry
-         whose Kind=="inbound", and return its ProviderMessageID.
+      3. Query the transcript for that conversation newest-first
+         (order=desc, gascity#3128), take the first entry whose
+         Kind=="inbound", and return its ProviderMessageID.
 
     Two queries (event + transcript) because the inbound event payload
     intentionally does NOT carry message_id — that field lives in the
     transcript and is the canonical source. See engdocs/architecture/
     api-control-plane.md for the typed-wire rationale.
+
+    The transcript query MUST be newest-first: the endpoint's oldest-first
+    default with a bounded limit hides the most recent inbound on busy
+    conversations, threading the reply under a stale message.
     """
     event = find_latest_inbound_for_session(session_id)
     if event is None:
@@ -432,7 +437,10 @@ def find_latest_inbound_message_id_for_session(
     # primary use case; fall through to dm if no rows come back.
     items: list[dict[str, Any]] = []
     for kind in ("room", "dm"):
-        qs = f"scope_id={gc_city_name()}&provider={provider}&conversation_id={conv_id}&kind={kind}"
+        qs = (
+            f"scope_id={gc_city_name()}&provider={provider}"
+            f"&conversation_id={conv_id}&kind={kind}&order=desc&limit=500"
+        )
         if workspace:
             qs += f"&account_id={workspace}"
         try:
@@ -442,7 +450,8 @@ def find_latest_inbound_message_id_for_session(
         items = res.get("items") or []
         if items:
             break
-    for entry in reversed(items):
+    # items are newest-first (order=desc): the first inbound is the latest.
+    for entry in items:
         if (entry.get("Kind") or entry.get("kind")) == "inbound":
             mid = (entry.get("ProviderMessageID") or entry.get("provider_message_id") or "").strip()
             if mid:

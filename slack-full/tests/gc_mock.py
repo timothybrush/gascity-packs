@@ -359,13 +359,26 @@ class GcMock:
         req: http.server.BaseHTTPRequestHandler,
         query: dict[str, str],
     ) -> None:
-        """GET /extmsg/transcript?scope_id=&provider=&conversation_id=&kind=[&account_id=]"""
+        """GET /extmsg/transcript?scope_id=&provider=&conversation_id=&kind=[&account_id=][&order=][&limit=]
+
+        Mirrors the real endpoint's pagination contract (gascity#3128):
+        oldest-first default, ``order=desc``, ``limit`` default 100 /
+        max 500. Faithful truncation is what makes the stale-thread-root
+        regression reproducible in tests.
+        """
         provider = query.get("provider", "")
         conversation_id = query.get("conversation_id", "")
         kind = query.get("kind", "")
         key = (provider, conversation_id, kind)
         with self._lock:
             items = list(self._transcripts.get(key, []))
+        if query.get("order", "asc") == "desc":
+            items.reverse()
+        try:
+            limit = int(query.get("limit", "100"))
+        except ValueError:
+            limit = 100
+        items = items[: min(limit, 500)]
         resp = json.dumps({"items": items}).encode()
         req.send_response(200)
         req.send_header("Content-Type", "application/json")
