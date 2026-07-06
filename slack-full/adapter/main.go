@@ -180,11 +180,13 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
 	"syscall"
 	"time"
+	"unicode"
 )
 
 const (
@@ -1672,7 +1674,14 @@ func slackGetUploadURL(token, filename string, length int) (*slackGetUploadURLRe
 	}
 	var sr slackGetUploadURLResp
 	if err := json.Unmarshal(respBody, &sr); err != nil {
-		return nil, fmt.Errorf("decode slack: %w (body=%s)", err, string(respBody))
+		// Do not embed respBody: a truncated/partial response can still
+		// carry upload_url — pre-signed token included — and this error
+		// reaches both log.Printf and the HTTP receipt body upstream.
+		// Status, size, and the unmarshal error (which reports offsets,
+		// not content) are enough to diagnose a malformed response.
+		// gpk-la1y.
+		return nil, fmt.Errorf("decode slack getUploadURLExternal response (status %s, %d bytes): %w",
+			httpResp.Status, len(respBody), err)
 	}
 	return &sr, nil
 }
@@ -1691,6 +1700,13 @@ func slackGetUploadURL(token, filename string, length int) (*slackGetUploadURLRe
 // multipart-with-filename pattern as the canonical shape; raw PUT silently
 // degrades to a "ghost upload" the channel post step can't bind to.
 func slackPutFileBytes(uploadURL string, filename string, body []byte) error {
+	// uploadURL is a pre-signed, token-bearing URL (see doc above). Every
+	// error below reports safeURL — never the raw uploadURL — so its embedded
+	// auth never reaches log.Printf or the HTTP receipt at the publishFile
+	// handler's sink. This mirrors slackDownloadToFile's redaction; the two
+	// sibling upload steps (slackGetUploadURL, slackCompleteUpload) already
+	// redact, and this one must too. gpk-la1y.
+	safeURL := redactSlackURL(uploadURL)
 	var buf bytes.Buffer
 	mw := multipart.NewWriter(&buf)
 	part, err := mw.CreateFormFile("filename", filename)
@@ -1705,26 +1721,19 @@ func slackPutFileBytes(uploadURL string, filename string, body []byte) error {
 	}
 	req, err := http.NewRequest(http.MethodPost, uploadURL, &buf)
 	if err != nil {
-		return err
+		return redactTransportError("build upload request to", safeURL, err)
 	}
 	req.Header.Set("Content-Type", mw.FormDataContentType())
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return err
+		return redactTransportError("upload POST to", safeURL, err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 300 {
 		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
-		// Redact the pre-signed upload URL — its query string carries a
-		// short-lived auth token; strip RawQuery so it does not reach adapter
-		// logs verbatim. url.Redacted() alone only handles userinfo passwords
-		// and would leave query-string tokens intact.
-		safeURL := uploadURL
-		if u, perr := url.Parse(uploadURL); perr == nil {
-			u.RawQuery = ""
-			safeURL = u.String()
-		}
-		return fmt.Errorf("upload POST %s: %s — %s", safeURL, resp.Status, string(respBody))
+		// respBody is untrusted origin content: sanitize control chars
+		// (log-line injection) and scrub any reflected URL/token. gpk-la1y.
+		return fmt.Errorf("upload POST %s: %s — %s", safeURL, resp.Status, sanitizeSlackErrorBody(respBody))
 	}
 	_, _ = io.Copy(io.Discard, resp.Body)
 	return nil
@@ -1754,7 +1763,12 @@ func slackCompleteUpload(token string, req slackCompleteUploadReq) (*slackComple
 	}
 	var sr slackCompleteUploadResp
 	if err := json.Unmarshal(respBody, &sr); err != nil {
-		return nil, fmt.Errorf("decode slack: %w (body=%s)", err, string(respBody))
+		// Do not embed respBody: completeUploadExternal responses carry
+		// full file objects (url_private, url_private_download) whose
+		// URLs can bear auth tokens, and this error reaches log.Printf
+		// and the HTTP receipt body upstream. gpk-la1y.
+		return nil, fmt.Errorf("decode slack completeUploadExternal response (status %s, %d bytes): %w",
+			httpResp.Status, len(respBody), err)
 	}
 	return &sr, nil
 }
@@ -2423,14 +2437,17 @@ func safeFilename(name string) string {
 func isSlackFileURL(rawURL string) (bool, error) {
 	u, err := url.ParseRequestURI(rawURL)
 	if err != nil {
-		return false, fmt.Errorf("parse url_private: %w", err)
+		// This error propagates verbatim into slackDownloadToFile's
+		// returned error and adapter logs — see unwrapURLError for why
+		// it cannot be wrapped raw. gpk-la1y.
+		return false, fmt.Errorf("parse url_private %q: %w", redactSlackURL(rawURL), unwrapURLError(err))
 	}
 	if !u.IsAbs() {
 		// ParseRequestURI accepts absolute paths (e.g. "/files-pri/...") and
 		// protocol-relative URLs ("//attacker.com/...") without an error;
 		// IsAbs() returns false for both, so they are caught here. A forged
 		// url_private must be a full absolute URL, never a path.
-		return false, fmt.Errorf("url_private not absolute: %q", rawURL)
+		return false, fmt.Errorf("url_private not absolute: %q", redactSlackURL(rawURL))
 	}
 	if u.Scheme != "https" {
 		return false, nil
@@ -2450,6 +2467,149 @@ func isSlackFileURL(rawURL string) (bool, error) {
 		return true, nil
 	}
 	return false, nil
+}
+
+// redactSlackURL returns a form of raw safe to embed in error messages
+// and logs: the query string AND fragment are dropped and userinfo is
+// removed entirely, while host/path are preserved so log scanners can
+// still correlate on the CDN link. Slack CDN url_private links and
+// pre-signed upload URLs carry auth tokens in the query (t=xoxe-...,
+// token=...) and sometimes the fragment, and a forged url_private may
+// carry attacker-chosen credentials in user[:password]@host form.
+// url.URL.Redacted() alone is NOT sufficient: it masks the userinfo
+// password only (leaving a bare username or the query/fragment intact),
+// so we clear those fields explicitly.
+//
+// Two input shapes bypass the structural field clears: input url.Parse
+// rejects outright (handled by the '?'/'#' cut + stripURLUserinfo
+// fallback), and an "opaque" URI (scheme:opaque with no "//"), where the
+// credential-bearing text lives in u.Opaque untouched by the clears.
+// url.Parse accepts the opaque form without error, so we detect it and
+// route it through the same textual fallback. Finally, a slackTokenRe
+// backstop guarantees no Slack token shape survives in ANY form
+// (hierarchical, opaque, or backslash-delimited). gpk-la1y.
+func redactSlackURL(raw string) string {
+	var safe string
+	if u, err := url.Parse(raw); err == nil && u.Opaque == "" {
+		u.RawQuery = ""
+		u.Fragment = ""
+		u.User = nil
+		safe = u.String()
+	} else {
+		safe, _, _ = strings.Cut(raw, "?")
+		safe, _, _ = strings.Cut(safe, "#")
+		safe = stripURLUserinfo(safe)
+	}
+	return slackTokenRe.ReplaceAllString(safe, "[redacted-token]")
+}
+
+// stripURLUserinfo removes a "user[:pass]@" prefix from the authority of
+// a URL-ish string that redactSlackURL could not clear structurally, so
+// forged credentials (or a token stuffed into userinfo) do not survive
+// its fallback. Only the authority between "://" and the next '/' is
+// considered, so an '@' in a later path segment is left alone. Inputs
+// lacking a "://" (e.g. an opaque scheme:host@... or backslash-delimited
+// form) have no authority we can locate textually; the slackTokenRe
+// backstop in redactSlackURL covers token-shaped credentials there. gpk-la1y.
+func stripURLUserinfo(s string) string {
+	i := strings.Index(s, "://")
+	if i < 0 {
+		return s
+	}
+	authStart := i + len("://")
+	rest := s[authStart:]
+	authority := rest
+	if end := strings.IndexByte(rest, '/'); end >= 0 {
+		authority = rest[:end]
+	}
+	at := strings.LastIndexByte(authority, '@')
+	if at < 0 {
+		return s
+	}
+	return s[:authStart] + authority[at+1:] + s[authStart+len(authority):]
+}
+
+// urlInTextRe matches an absolute URL embedded in free-form text,
+// bounded by whitespace, quotes, or angle brackets. It scrubs raw URLs
+// that appear inside error text we do not author — see scrubSlackSecrets.
+var urlInTextRe = regexp.MustCompile(`[a-zA-Z][a-zA-Z0-9+.-]*://[^\s"'<>]+`)
+
+// slackTokenRe matches Slack auth token shapes (xoxb-/xoxe-/xoxp-/xoxa-/
+// xoxr-/xoxs-/xoxd- and xapp- app tokens). It is the backstop for a token
+// that reaches error text WITHOUT travelling inside an absolute URL — a
+// token in a relative redirect Location (no scheme://, so urlInTextRe
+// misses it), or one reflected bare by a compromised-but-allowlisted
+// origin in a 4xx body. gpk-la1y.
+var slackTokenRe = regexp.MustCompile(`(xox[a-zA-Z]|xapp)-[A-Za-z0-9-]+`)
+
+// scrubSlackSecrets removes secrets that must never reach adapter logs or
+// HTTP receipts from free-form text: every embedded absolute URL is passed
+// through redactSlackURL (dropping token-bearing query, fragment, and
+// userinfo), and any bare Slack token shape that survives is replaced.
+// Both passes are required: net/http parses a redirect Location BEFORE
+// CheckRedirect runs and, on failure, interpolates the raw header into a
+// *url.Error's text — and that header may be relative, so the URL pass
+// alone would miss its token. gpk-la1y.
+func scrubSlackSecrets(s string) string {
+	s = urlInTextRe.ReplaceAllStringFunc(s, redactSlackURL)
+	s = slackTokenRe.ReplaceAllString(s, "[redacted-token]")
+	return s
+}
+
+// sanitizeSlackErrorBody makes an untrusted HTTP error-response body safe
+// to embed in an error that reaches log.Printf and an HTTP receipt: it
+// strips control characters (defeating log-line injection via embedded
+// CR/LF) and scrubs any URL or bare Slack token the origin reflected.
+// gpk-la1y.
+func sanitizeSlackErrorBody(b []byte) string {
+	cleaned := strings.Map(func(r rune) rune {
+		switch r {
+		case '\t', '\n', '\r':
+			return ' '
+		}
+		if unicode.IsControl(r) {
+			return -1
+		}
+		return r
+	}, string(b))
+	return scrubSlackSecrets(cleaned)
+}
+
+// unwrapURLError returns the underlying cause of a *url.Error, or err
+// unchanged. A *url.Error's Error() text embeds the full request URL —
+// token-bearing query included — so wrapping one with %w leaks the URL
+// even when the surrounding message is redacted. Callers unwrap here and
+// re-wrap the bare cause against a redactSlackURL form. gpk-la1y.
+func unwrapURLError(err error) error {
+	var uerr *url.Error
+	if errors.As(err, &uerr) {
+		return uerr.Err
+	}
+	return err
+}
+
+// redactTransportError re-wraps a net/http transport failure so no
+// token-bearing URL reaches adapter logs or HTTP receipts, reporting safeURL
+// (a redactSlackURL form) in place of the raw target. unwrapURLError strips
+// the *url.Error wrapper — whose Error() embeds the full request URL —
+// then scrubSlackSecrets removes any token the bare cause still carries.
+// The critical case: net/http parses a redirect Location BEFORE
+// CheckRedirect runs and, on a malformed header, returns a *url.Error whose
+// .Err text interpolates the raw, token-bearing Location verbatim (absolute
+// or relative). Safety rests on unwrapURLError reading only .Err (never
+// .URL, which net/http also sets to the raw redirect target) and on
+// scrubSlackSecrets as the redaction of last resort. The %w wrap is kept
+// when scrubbing is a no-op so errors.Is still matches plain transport
+// errors (e.g. connection-refused); it degrades to %s only on the
+// URL-bearing path. Shared by slackDownloadToFile (GET) and
+// slackPutFileBytes (upload POST). gpk-la1y.
+func redactTransportError(action, safeURL string, e error) error {
+	cause := unwrapURLError(e)
+	causeText := cause.Error()
+	if scrubbed := scrubSlackSecrets(causeText); scrubbed != causeText {
+		return fmt.Errorf("%s %s: %s", action, safeURL, scrubbed)
+	}
+	return fmt.Errorf("%s %s: %w", action, safeURL, cause)
 }
 
 // validateSlackFileURL is the SSRF gate applied to inbound url_private
@@ -2480,41 +2640,40 @@ var slackDialIPGuard = isPrivateOrLoopbackIP
 // validated against the Slack allowlist before any network I/O — see
 // isSlackFileURL for the threat model (gc-0fn).
 func slackDownloadToFile(token, urlPrivate, dest string) error {
+	// Every error below reports safeURL — never the raw urlPrivate — to
+	// keep its token-bearing query and any attacker-chosen userinfo out
+	// of adapter logs (see redactSlackURL for the threat model). The
+	// validateSlackFileURL branch is covered too: isSlackFileURL redacts
+	// its own error messages. gpk-la1y.
+	safeURL := redactSlackURL(urlPrivate)
+	// Transport failures below route through redactTransportError, which
+	// unwraps the *url.Error (whose Error() embeds the full token-bearing
+	// request URL, including a raw redirect Location) and reports safeURL.
+	// gpk-la1y.
 	ok, err := validateSlackFileURL(urlPrivate)
 	if err != nil {
 		return fmt.Errorf("validating url_private: %w", err)
 	}
 	if !ok {
-		// Redact userinfo before logging — a forged url_private may carry
-		// attacker-chosen credentials in user:password@host form, which
-		// would otherwise land in adapter logs verbatim. Redacted() also
-		// preserves the host/path for log-scanner matching.
-		safe := urlPrivate
-		if u, perr := url.Parse(urlPrivate); perr == nil {
-			safe = u.Redacted()
-		}
-		return fmt.Errorf("url_private host not in slack allowlist: %q", safe)
+		// safeURL preserves the host/path for log-scanner matching while
+		// masking attacker-chosen credentials and dropping the query.
+		return fmt.Errorf("url_private host not in slack allowlist: %q", safeURL)
 	}
 	req, err := http.NewRequest(http.MethodGet, urlPrivate, nil)
 	if err != nil {
-		return err
+		return redactTransportError("build download request to", safeURL, err)
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 	resp, err := slackHTTPClientSingleton().Do(req)
 	if err != nil {
-		return err
+		return redactTransportError("GET", safeURL, err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 300 {
 		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
-		// Redact url_private query string before logging — Slack CDN
-		// links can carry t=xoxe-... user tokens that must not reach
-		// the structured error reaching log.Printf upstream.
-		safeURL := urlPrivate
-		if u, perr := url.Parse(urlPrivate); perr == nil {
-			safeURL = u.Redacted()
-		}
-		return fmt.Errorf("GET %s: %s — %s", safeURL, resp.Status, string(respBody))
+		// respBody is untrusted origin content: sanitize control chars
+		// (log-line injection) and scrub any reflected URL/token. gpk-la1y.
+		return fmt.Errorf("GET %s: %s — %s", safeURL, resp.Status, sanitizeSlackErrorBody(respBody))
 	}
 	tmp := dest + ".tmp"
 	// 0o600: file content may be DM-private; rename below preserves this mode. gc-ywe.6.
@@ -2652,15 +2811,20 @@ func buildSlackHTTPClient() *http.Client {
 		Timeout:   5 * time.Minute,
 		Transport: transport,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			// Redirect targets carry the same token-bearing query as the
+			// original url_private, and this error's text survives inside
+			// the *url.Error returned by Client.Do — redactTransport only
+			// sanitizes the outer URL, not this message. Redacted() alone
+			// keeps the query, so redact fully here. gpk-la1y.
 			if len(via) >= 10 {
-				return fmt.Errorf("redirect chain exceeded 10 hops at %s", req.URL.Redacted())
+				return fmt.Errorf("redirect chain exceeded 10 hops at %s", redactSlackURL(req.URL.String()))
 			}
 			ok, err := validateSlackFileURL(req.URL.String())
 			if err != nil {
 				return fmt.Errorf("validating redirect target: %w", err)
 			}
 			if !ok {
-				return fmt.Errorf("refusing redirect to non-slack host %q", req.URL.Redacted())
+				return fmt.Errorf("refusing redirect to non-slack host %q", redactSlackURL(req.URL.String()))
 			}
 			return nil
 		},
