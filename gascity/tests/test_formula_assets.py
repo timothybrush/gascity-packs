@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import json
 import pathlib
 import re
 import subprocess
@@ -699,60 +700,136 @@ class FormulaAssetTests(unittest.TestCase):
             self.assertTrue((path.parent / "prompt.template.md").is_file())
         self.assertIn(root / "roles" / "agents" / "run-operator" / "agent.toml", paths)
 
-    def test_role_agent_prompts_include_graph_claim_protocol(self) -> None:
+    def test_role_agent_prompts_embed_shared_claim_protocol(self) -> None:
         root = pathlib.Path(__file__).resolve().parents[1]
-        shared_lines = (
-            root / "roles" / "prompts" / "shared" / "gc-role-worker.md.tmpl"
-        ).read_text(encoding="utf-8").splitlines()
-        expected = "\n".join(shared_lines[1:-1]).strip()
+        fragment = root / "template-fragments" / "gc-role-worker.template.md"
+        text = fragment.read_text(encoding="utf-8")
+        include = '{{ template "gc-role-worker" . }}'
 
-        for fragment in (
-            "GC_CLAIM",
-            "`gc hook --claim --json` is the only permitted discovery source",
-            "gc hook --claim --json",
+        for required in (
+            "only work-discovery command",
+            "gc hook --claim --drain-ack --json",
+            "`bd mol current`",
             "CLAIMED_BEAD_ID",
-            "CLAIM_REJECTED",
             "gc runtime drain-ack",
-            "gc.continuation_group",
-            "gc.scope_role=teardown",
-            "Never close a bead that asks for close metadata before setting that metadata",
-            'gc bd update "$GC_BEAD_ID"',
-            "Finding review issues, missing tests, or required follow-up is usually the\nbead's output",
-            "check for more routed work before draining",
-            "running the same `GC_CLAIM` block again",
+            "continuation-group work",
+            "Set required metadata before closing same claimed bead",
+            'bd update "$CLAIMED_BEAD_ID"',
+            "Review findings, missing tests, or follow-up usually are output",
+            "After close, run `gc gc claim` again",
+            'Never claim "drained" without acknowledgement',
         ):
-            with self.subTest(fragment=fragment):
-                self.assertIn(fragment, expected)
-        self.assertNotIn("gc bd update \"$WORK_ID\" --claim --json", expected)
+            with self.subTest(required=required):
+                self.assertIn(required, text)
+        self.assertNotIn("bd update \"$WORK_ID\" --claim --json", text)
+        self.assertNotIn("GC_CLAIM", text)
 
         for agent_name in ROLE_AGENTS:
             prompt = root / "roles" / "agents" / agent_name / "prompt.template.md"
             with self.subTest(agent=agent_name):
-                self.assertEqual(prompt.read_text(encoding="utf-8").strip(), expected)
+                self.assertEqual(prompt.read_text(encoding="utf-8"), f"{include}\n")
 
-    def test_role_worker_protocol_fragment_matches_shared_prompt(self) -> None:
+    def test_city_claim_command_verifies_and_normalizes_claim(self) -> None:
         root = pathlib.Path(__file__).resolve().parents[1]
-        shared = root / "roles" / "prompts" / "shared" / "gc-role-worker.md.tmpl"
+        command = root / "commands" / "claim" / "run.sh"
 
-        for fragment in (
-            root / "template-fragments" / "gc-role-worker.template.md",
-            root / "roles" / "template-fragments" / "gc-role-worker.template.md",
-        ):
-            with self.subTest(fragment=fragment):
-                self.assertEqual(fragment.read_text(encoding="utf-8"), shared.read_text(encoding="utf-8"))
+        self.assertTrue(command.is_file())
+        self.assertTrue(command.stat().st_mode & 0o111)
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = pathlib.Path(tmp)
+            bin_dir = tmp_path / "bin"
+            bin_dir.mkdir()
+            fake_gc = bin_dir / "gc"
+            fake_gc.write_text(
+                "#!/bin/sh\n"
+                "if [ \"$1\" = hook ] && [ \"$2\" = --claim ] && [ \"$3\" = --drain-ack ] && [ \"$4\" = --json ]; then\n"
+                "  printf '%s\\n' '{\"action\":\"work\",\"bead_id\":\"bd-123\",\"assignee\":\"worker\",\"route\":\"gc.implementation-worker\"}'\n"
+                "else\n"
+                "  exit 2\n"
+                "fi\n",
+                encoding="utf-8",
+            )
+            fake_gc.chmod(0o755)
+            fake_bd = bin_dir / "bd"
+            fake_bd.write_text(
+                "#!/bin/sh\n"
+                "if [ \"$1\" = show ] && [ \"$2\" = bd-123 ] && [ \"$3\" = --json ]; then\n"
+                "  printf '%s\\n' '{\"id\":\"bd-123\",\"status\":\"in_progress\",\"assignee\":\"worker\",\"metadata\":{\"gc.routed_to\":\"gc.implementation-worker\",\"gc.root_bead_id\":\"root-1\",\"gc.continuation_group\":\"group-1\"}}'\n"
+                "else\n"
+                "  exit 2\n"
+                "fi\n",
+                encoding="utf-8",
+            )
+            fake_bd.chmod(0o755)
+            env = {
+                **os.environ,
+                "BEADS_ACTOR": "worker",
+                "GC_AGENT": "gc.implementation-worker",
+                "GC_PACK_DIR": str(root),
+                "GC_PACK_NAME": "gc",
+                "PATH": f"{bin_dir}:{os.environ['PATH']}",
+            }
+            result = subprocess.run([str(command)], capture_output=True, env=env, text=True)
 
-        pack_root = root.parent
-        for pack_name in THIRD_PARTY_BUILD_PACKS:
-            fragment = pack_root / pack_name / "template-fragments" / "gc-role-worker.template.md"
-            with self.subTest(fragment=fragment):
-                self.assertEqual(fragment.read_text(encoding="utf-8"), shared.read_text(encoding="utf-8"))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            json.loads(result.stdout),
+            {
+                "action": "work",
+                "bead_id": "bd-123",
+                "root_bead_id": "root-1",
+                "continuation_group": "group-1",
+                "bead": {
+                    "id": "bd-123",
+                    "status": "in_progress",
+                    "assignee": "worker",
+                    "metadata": {
+                        "gc.routed_to": "gc.implementation-worker",
+                        "gc.root_bead_id": "root-1",
+                        "gc.continuation_group": "group-1",
+                    },
+                },
+            },
+        )
 
-    def test_third_party_agents_include_gc_claim_protocol(self) -> None:
+    def test_city_claim_command_returns_drain_without_bead_lookup(self) -> None:
+        root = pathlib.Path(__file__).resolve().parents[1]
+        command = root / "commands" / "claim" / "run.sh"
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = pathlib.Path(tmp)
+            bin_dir = tmp_path / "bin"
+            bin_dir.mkdir()
+            fake_gc = bin_dir / "gc"
+            fake_gc.write_text(
+                "#!/bin/sh\n"
+                "if [ \"$1\" = hook ] && [ \"$2\" = --claim ] && [ \"$3\" = --drain-ack ] && [ \"$4\" = --json ]; then\n"
+                "  printf '%s\\n' '{\"action\":\"drain\"}'\n"
+                "else\n"
+                "  exit 2\n"
+                "fi\n",
+                encoding="utf-8",
+            )
+            fake_gc.chmod(0o755)
+            fake_bd = bin_dir / "bd"
+            fake_bd.write_text("#!/bin/sh\nexit 99\n", encoding="utf-8")
+            fake_bd.chmod(0o755)
+            env = {
+                **os.environ,
+                "BEADS_ACTOR": "worker",
+                "GC_PACK_DIR": str(root),
+                "GC_PACK_NAME": "gc",
+                "PATH": f"{bin_dir}:{os.environ['PATH']}",
+            }
+            result = subprocess.run([str(command)], capture_output=True, env=env, text=True)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout), {"action": "drain"})
+
+
+    def test_third_party_agents_include_work_claim_protocol(self) -> None:
         root = pathlib.Path(__file__).resolve().parents[2]
         include = '{{ template "gc-role-worker" . }}'
-        expected_fragment = (
-            root / "gascity" / "roles" / "prompts" / "shared" / "gc-role-worker.md.tmpl"
-        ).read_text(encoding="utf-8")
 
         for pack_name in THIRD_PARTY_BUILD_PACKS:
             prompts = sorted((root / pack_name / "agents").glob("*/prompt.template.md"))
@@ -762,8 +839,6 @@ class FormulaAssetTests(unittest.TestCase):
                     text = prompt.read_text(encoding="utf-8")
                     self.assertIn(include, text)
                     self.assertEqual(text.count(include), 1)
-                    local_fragment = prompt.parent / "template-fragments" / "gc-role-worker.template.md"
-                    self.assertEqual(local_fragment.read_text(encoding="utf-8"), expected_fragment)
 
     def test_formula_route_targets_are_backed_by_providerless_role_agents(self) -> None:
         root = pathlib.Path(__file__).resolve().parents[1]

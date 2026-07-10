@@ -40,6 +40,14 @@ jobs:
       - name: Run Python pack tests
         run: python3 -m pytest tests contributing/tests gascity/tests discord/tests github/tests slack-full/tests slack-channel/tests pr-pipeline/tests -q
 
+      - name: Lint derived prompt composition
+        run: |
+          go install github.com/gastownhall/gascity/cmd/gc@latest
+          GC_BIN="$(go env GOPATH)/bin/gc"
+          for pack in bmad compound-engineering gstack superpowers; do
+            "$GC_BIN" lint "$pack"
+          done
+
       - name: Run Gastown shell tests
         run: |
           for test_script in gastown/tests/test_*.sh; do
