@@ -195,7 +195,8 @@ verdict is `iterate`, `changes_required`, or similar.
 
 If later terminal commands do not inherit shell variables, use the explicit
 `CLAIMED_BEAD_ID`, `CLAIMED_ROOT_BEAD_ID`, and
-`CLAIMED_CONTINUATION_GROUP` printed by the claim command. Never run `gc bd update` or `gc bd close` with an empty id.
+`CLAIMED_CONTINUATION_GROUP` printed by the claim command. Never run
+`gc bd update` or `gc bd close` with an empty id.
 
 When updating or closing a bead, pass exactly one explicit claimed bead id.
 Quote every metadata assignment and close reason. Do not put freeform prose or
