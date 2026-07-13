@@ -715,15 +715,15 @@ class FormulaAssetTests(unittest.TestCase):
             "gc runtime drain-ack",
             "gc.continuation_group",
             "gc.scope_role=teardown",
-            "Never use a bare `bd close` for a bead that asks for close metadata",
-            'bd update "$GC_BEAD_ID"',
+            "Never use `gc bd close` for a bead that asks for close metadata",
+            'gc bd update "$GC_BEAD_ID"',
             "Finding review issues, missing tests, or required follow-up is usually the\nbead's output",
             "check for more routed work before draining",
             "running the same `GC_CLAIM` block again",
         ):
             with self.subTest(fragment=fragment):
                 self.assertIn(fragment, expected)
-        self.assertNotIn("bd update \"$WORK_ID\" --claim --json", expected)
+        self.assertNotIn("gc bd update \"$WORK_ID\" --claim --json", expected)
 
         for agent_name in ROLE_AGENTS:
             prompt = root / "roles" / "agents" / agent_name / "prompt.template.md"
@@ -1049,9 +1049,9 @@ class FormulaAssetTests(unittest.TestCase):
             "Do not inspect pack source directories",
             ".beads/config.yaml",
             "Close commands do not accept metadata flags",
-            "bd update <claimed-step-id> --set-metadata 'gc.outcome=pass'",
-            "bd close <claimed-step-id> --reason",
-            "Do not pass `--set-metadata` or `--metadata` to `bd close`",
+            "gc bd update <claimed-step-id> --set-metadata 'gc.outcome=pass'",
+            "gc bd close <claimed-step-id> --reason",
+            "Do not pass `--set-metadata` or `--metadata` to `gc bd close`",
             "do not use\n`gc.outcome=success`",
         ):
             with self.subTest(asset="build-base/prepare.md", fragment=fragment):
@@ -1391,7 +1391,7 @@ class FormulaAssetTests(unittest.TestCase):
             "gc convoy create <name> <work-item-id...> --json",
             "Do not create an empty convoy",
             "Do not call `gc convoy add` for newly-created beads",
-            "Do not call `bd show <implementation-convoy-id>`",
+            "Do not call `gc bd show <implementation-convoy-id>`",
         ):
             with self.subTest(step="decompose", fragment=fragment):
                 self.assertIn(fragment, decompose_description)
@@ -1448,7 +1448,7 @@ class FormulaAssetTests(unittest.TestCase):
             "code_review.acceptance_verdict=approve",
             "code_review.test_evidence_verdict=approve",
             "code_review.simplicity_verdict=approve",
-            "bd update \"$CLAIMED_BEAD_ID\"",
+            "gc bd update \"$CLAIMED_BEAD_ID\"",
             "source anchor/worktree",
             "launcher rig root may remain unchanged",
             "not to the launcher rig root",
@@ -1633,11 +1633,11 @@ class FormulaAssetTests(unittest.TestCase):
         for relative_path, keys in path_contracts.items():
             text = (root / relative_path).read_text(encoding="utf-8")
             with self.subTest(asset=relative_path, fragment="metadata warning"):
-                self.assertIn("Do not use `bd update --metadata 'key=value'`", text)
+                self.assertIn("Do not use `gc bd update --metadata 'key=value'`", text)
             for fragment in (
-                'bd update "<claimed-step-id>" --set-metadata "gc.outcome=pass"',
-                'bd close "<claimed-step-id>" --reason "<concise reason>"',
-                "Do not pass\n`--metadata` or `--set-metadata` to `bd close`",
+                'gc bd update "<claimed-step-id>" --set-metadata "gc.outcome=pass"',
+                'gc bd close "<claimed-step-id>" --reason "<concise reason>"',
+                "Do not pass\n`--metadata` or `--set-metadata` to `gc bd close`",
             ):
                 with self.subTest(asset=relative_path, fragment=fragment):
                     self.assertIn(fragment, text)
@@ -1645,7 +1645,7 @@ class FormulaAssetTests(unittest.TestCase):
                 line for line in text.splitlines() if "Do not use" not in line
             )
             self.assertIsNone(
-                re.search(r"bd update[^`\n]*--metadata ['\"]?[A-Za-z0-9_.-]+=", positive_guidance),
+                re.search(r"gc bd update[^`\n]*--metadata ['\"]?[A-Za-z0-9_.-]+=", positive_guidance),
                 relative_path,
             )
             for key in keys:
@@ -2583,16 +2583,16 @@ class FormulaAssetTests(unittest.TestCase):
         self.assertIn("re-opens the design loop", design_approval)
         self.assertIn("revision summary", design_approval)
         self.assertIn("specific design sections", design_approval)
-        self.assertIn('bd update "$CLAIMED_BEAD_ID"', design_approval)
-        self.assertIn("Do not pass `--metadata` or `--set-metadata` to `bd close`", design_approval)
+        self.assertIn('gc bd update "$CLAIMED_BEAD_ID"', design_approval)
+        self.assertIn("Do not pass `--metadata` or `--set-metadata` to `gc bd close`", design_approval)
         self.assertIn("stock Superpowers checklist items 6-7", write_spec)
         self.assertIn("Spec self-review", write_spec)
         self.assertIn("stock design-doc state", write_spec)
         self.assertIn("docs/superpowers/specs/", write_spec)
         self.assertIn("On repeated attempts", write_spec)
         self.assertIn("without clobbering loop feedback", write_spec)
-        self.assertIn('bd update "$CLAIMED_BEAD_ID"', write_spec)
-        self.assertIn("Do not pass `--metadata` or `--set-metadata` to `bd close`", write_spec)
+        self.assertIn('gc bd update "$CLAIMED_BEAD_ID"', write_spec)
+        self.assertIn("Do not pass `--metadata` or `--set-metadata` to `gc bd close`", write_spec)
         self.assertIn("written spec", spec_approval)
         self.assertIn("stock `User reviews spec?` approval gate", spec_approval)
         self.assertIn("stock checklist item 8", spec_approval)
@@ -2608,20 +2608,20 @@ class FormulaAssetTests(unittest.TestCase):
         self.assertIn("silence", spec_approval)
         self.assertIn("spec revision summary", spec_approval)
         self.assertIn("Do not run `.gc/scripts/checks/design-review-approved.sh`", spec_approval)
-        self.assertIn("Do not use\n`bd update --metadata`", spec_approval)
+        self.assertIn("Do not use\n`gc bd update --metadata`", spec_approval)
         self.assertIn("--metadata-field gc.step_id=requirements.review-written-spec", spec_approval)
         self.assertIn("--metadata-field gc.step_id=requirements.apply-spec-feedback", spec_approval)
         self.assertIn("--metadata-field gc.scope_role=member", spec_approval)
-        self.assertIn("Do not use `bd list --root`", spec_approval)
-        self.assertIn('bd update "$CLAIMED_BEAD_ID"', spec_approval)
-        self.assertIn('bd show "$CLAIMED_BEAD_ID" --json', spec_approval)
+        self.assertIn("Do not use `gc bd list --root`", spec_approval)
+        self.assertIn('gc bd update "$CLAIMED_BEAD_ID"', spec_approval)
+        self.assertIn('gc bd show "$CLAIMED_BEAD_ID" --json', spec_approval)
         self.assertIn("design_review.approval_mode=autonomous", spec_approval)
         self.assertIn("design_review.output_path=<approval-summary path>", spec_approval)
         self.assertIn('if type == "array" then .[0] else . end', spec_approval)
         self.assertIn('design_review.verdict == "done"', spec_approval)
-        self.assertIn("Do not pass `--metadata` or `--set-metadata` to `bd close`", spec_approval)
-        self.assertIn('bd update "$CLAIMED_BEAD_ID"', apply_spec_feedback)
-        self.assertIn("Do not pass `--metadata` or `--set-metadata` to `bd close`", apply_spec_feedback)
+        self.assertIn("Do not pass `--metadata` or `--set-metadata` to `gc bd close`", spec_approval)
+        self.assertIn('gc bd update "$CLAIMED_BEAD_ID"', apply_spec_feedback)
+        self.assertIn("Do not pass `--metadata` or `--set-metadata` to `gc bd close`", apply_spec_feedback)
         self.assertIn("stock brainstorming terminal state", final_requirements)
         self.assertIn("where Superpowers\nwould invoke `writing-plans`", final_requirements)
         self.assertIn("stock checklist item 9", final_requirements)
@@ -2650,8 +2650,8 @@ class FormulaAssetTests(unittest.TestCase):
         ):
             with self.subTest(fragment=fragment):
                 self.assertIn(fragment, brainstorm_design)
-        self.assertIn('bd update "$CLAIMED_BEAD_ID"', brainstorm_design)
-        self.assertIn("Do not pass `--metadata` or `--set-metadata` to `bd close`", brainstorm_design)
+        self.assertIn('gc bd update "$CLAIMED_BEAD_ID"', brainstorm_design)
+        self.assertIn("Do not pass `--metadata` or `--set-metadata` to `gc bd close`", brainstorm_design)
 
         review_written_spec = (
             pack_root
@@ -2662,8 +2662,8 @@ class FormulaAssetTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
         self.assertIn("stock spec reviewer subagent as a Gas City graph lane", review_written_spec)
         self.assertIn("spec-document-reviewer-prompt.md", review_written_spec)
-        self.assertIn('bd update "$CLAIMED_BEAD_ID"', review_written_spec)
-        self.assertIn("Do not pass `--metadata` or `--set-metadata` to `bd close`", review_written_spec)
+        self.assertIn('gc bd update "$CLAIMED_BEAD_ID"', review_written_spec)
+        self.assertIn("Do not pass `--metadata` or `--set-metadata` to `gc bd close`", review_written_spec)
 
         vendor_skill_root = pack_root / "vendor" / "superpowers" / "skills" / "brainstorming"
         installed_skill_root = pack_root / "skills" / "brainstorming"
@@ -3003,7 +3003,7 @@ class FormulaAssetTests(unittest.TestCase):
             "hard-fail if the selected source anchor id equals the synthetic input convoy id",
             "worktrees/<source-anchor-id>",
             "git worktree add",
-            "bd update <source-anchor-id> --set-metadata work_dir=",
+            "gc bd update <source-anchor-id> --set-metadata work_dir=",
             "Do not edit source files in the launcher checkout",
         ):
             with self.subTest(step="prepare-worktree", fragment=fragment):
@@ -3029,7 +3029,7 @@ class FormulaAssetTests(unittest.TestCase):
         for fragment in (
             "Read `work_dir` from the source anchor",
             "close only `<source-anchor-id>`",
-            "bd show <source-anchor-id> --json",
+            "gc bd show <source-anchor-id> --json",
             "status=closed",
             "gc.outcome=pass",
             "if either check fails",
@@ -3150,9 +3150,9 @@ class FormulaAssetTests(unittest.TestCase):
             "github-pr-review": ("pull", "gc.github.head_sha"),
         }
         required_common = {
-            "bd list --metadata-field gc.kind=github_source",
-            "bd create",
-            "bd update",
+            "gc bd list --metadata-field gc.kind=github_source",
+            "gc bd create",
+            "gc bd update",
             "--external-ref",
             "gc.github.kind",
             "gc.github.repo",
@@ -3251,7 +3251,7 @@ class FormulaAssetTests(unittest.TestCase):
         implementation_plan_normalized = " ".join(implementation_plan.split())
 
         for fragment in (
-            "bd update <root-bead-id>",
+            "gc bd update <root-bead-id>",
             "gc.github.run_dir",
             "gc.github.requirements_path",
             "gc.github.implementation_plan_path",
@@ -3386,8 +3386,8 @@ description = "Override sink that writes the base triage report contract."
             "gc.root_bead_id",
             "gc.github.source_bead_id",
             "gc.github.triage_dir",
-            "bd show <root-bead-id> --json",
-            "bd update <root-bead-id>",
+            "gc bd show <root-bead-id> --json",
+            "gc bd update <root-bead-id>",
             "Read `gc.github.snapshot_path`",
             "Do not write a separate triage context file",
         }
@@ -3591,17 +3591,20 @@ description = "Override sink that writes the base triage report contract."
             show_dir.mkdir()
             for bead, payload in beads_by_id.items():
                 (show_dir / f"{bead}.json").write_text(payload, encoding="utf-8")
-            fake_bd = bin_dir / "bd"
-            fake_bd.write_text(
+            fake_gc = bin_dir / "gc"
+            fake_gc.write_text(
                 "#!/usr/bin/env bash\n"
                 "set -euo pipefail\n"
+                "while [ \"${1:-}\" != \"bd\" ]; do shift; done\n"
+                "shift\n"
                 "case \"$1\" in\n"
+                "  version) exit 0 ;;\n"
                 "  show) cat \"$BD_SHOW_DIR/$2.json\" ;;\n"
                 "  *) exit 2 ;;\n"
                 "esac\n",
                 encoding="utf-8",
             )
-            fake_bd.chmod(0o755)
+            fake_gc.chmod(0o755)
 
             env = {
                 **os.environ,
@@ -3639,11 +3642,14 @@ description = "Override sink that writes the base triage report contract."
             show_path.write_text(show_json, encoding="utf-8")
             parent_show_path.write_text(parent_show_json or show_json, encoding="utf-8")
             list_path.write_text(list_json, encoding="utf-8")
-            fake_bd = bin_dir / "bd"
-            fake_bd.write_text(
+            fake_gc = bin_dir / "gc"
+            fake_gc.write_text(
                 "#!/usr/bin/env bash\n"
                 "set -euo pipefail\n"
+                "while [ \"${1:-}\" != \"bd\" ]; do shift; done\n"
+                "shift\n"
                 "case \"$1\" in\n"
+                "  version) exit 0 ;;\n"
                 "  show)\n"
                 "    if [ \"${2:-}\" = \"root\" ]; then\n"
                 "      cat \"$BD_PARENT_SHOW_JSON\"\n"
@@ -3656,7 +3662,7 @@ description = "Override sink that writes the base triage report contract."
                 "esac\n",
                 encoding="utf-8",
             )
-            fake_bd.chmod(0o755)
+            fake_gc.chmod(0o755)
 
             env = {
                 **os.environ,
@@ -4110,18 +4116,21 @@ description = "Override sink that writes the base triage report contract."
             tmp = pathlib.Path(td)
             bin_dir = tmp / "bin"
             bin_dir.mkdir()
-            fake_bd = bin_dir / "bd"
-            fake_bd.write_text(
+            fake_gc = bin_dir / "gc"
+            fake_gc.write_text(
                 "#!/usr/bin/env bash\n"
                 "set -euo pipefail\n"
+                "while [ \"${1:-}\" != \"bd\" ]; do shift; done\n"
+                "shift\n"
                 "case \"$1\" in\n"
+                "  version) exit 0 ;;\n"
                 "  show) cat \"$BD_SHOW_JSON\" ;;\n"
                 "  list) cat \"$BD_LIST_JSON\" ;;\n"
                 "  *) exit 2 ;;\n"
                 "esac\n",
                 encoding="utf-8",
             )
-            fake_bd.chmod(0o755)
+            fake_gc.chmod(0o755)
 
             show_json = tmp / "show.json"
             list_json = tmp / "list.json"
@@ -4190,18 +4199,21 @@ description = "Override sink that writes the base triage report contract."
             tmp = pathlib.Path(td)
             bin_dir = tmp / "bin"
             bin_dir.mkdir()
-            fake_bd = bin_dir / "bd"
-            fake_bd.write_text(
+            fake_gc = bin_dir / "gc"
+            fake_gc.write_text(
                 "#!/usr/bin/env bash\n"
                 "set -euo pipefail\n"
+                "while [ \"${1:-}\" != \"bd\" ]; do shift; done\n"
+                "shift\n"
                 "case \"$1\" in\n"
+                "  version) exit 0 ;;\n"
                 "  show) cat \"$BD_SHOW_JSON\" ;;\n"
                 "  list) cat \"$BD_LIST_JSON\" ;;\n"
                 "  *) exit 2 ;;\n"
                 "esac\n",
                 encoding="utf-8",
             )
-            fake_bd.chmod(0o755)
+            fake_gc.chmod(0o755)
 
             show_json = tmp / "show.json"
             list_json = tmp / "list.json"
@@ -4283,18 +4295,21 @@ description = "Override sink that writes the base triage report contract."
             tmp = pathlib.Path(td)
             bin_dir = tmp / "bin"
             bin_dir.mkdir()
-            fake_bd = bin_dir / "bd"
-            fake_bd.write_text(
+            fake_gc = bin_dir / "gc"
+            fake_gc.write_text(
                 "#!/usr/bin/env bash\n"
                 "set -euo pipefail\n"
+                "while [ \"${1:-}\" != \"bd\" ]; do shift; done\n"
+                "shift\n"
                 "case \"$1\" in\n"
+                "  version) exit 0 ;;\n"
                 "  show) cat \"$BD_SHOW_JSON\" ;;\n"
                 "  list) cat \"$BD_LIST_JSON\" ;;\n"
                 "  *) exit 2 ;;\n"
                 "esac\n",
                 encoding="utf-8",
             )
-            fake_bd.chmod(0o755)
+            fake_gc.chmod(0o755)
 
             show_json = tmp / "show.json"
             list_json = tmp / "list.json"

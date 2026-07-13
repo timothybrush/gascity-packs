@@ -14,9 +14,9 @@ write_gc_stub() {
     mkdir -p "$bin"
     cat >"$bin/gc" <<'SH'
 #!/usr/bin/env sh
-# Only `gc --rig <rig> bd list --status=open --json` is exercised here.
+# Only `gc bd --rig <rig> list --status=open --json` is exercised here.
 case "$*" in
-    *"bd list"*"--json"*) cat "$GC_BEADS_JSON" ;;
+    *"bd"*"list"*"--json"*) cat "$GC_BEADS_JSON" ;;
     *) printf '[]' ;;
 esac
 SH

@@ -52,7 +52,7 @@ if [ -z "${GC_CITY:-}" ] || [ ! -f "$GC_CITY/city.toml" ]; then
 fi
 
 if [ -z "${GC_RIG:-}" ]; then
-  echo "polecat-churn-watcher: GC_RIG must be set (rig name to scope bd list)" >&2
+  echo "polecat-churn-watcher: GC_RIG must be set (rig name to scope gc bd list)" >&2
   exit 2
 fi
 
@@ -88,7 +88,7 @@ printf "%s\n" "$current_pids" > "$STATE_FILE"
 # recorded session identity avoids the old work_dir-substring false positives.
 ts=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
-open_beads_json=$(gc --rig "$GC_RIG" bd list --status=open --json 2>/dev/null || echo "[]")
+open_beads_json=$(gc bd --rig "$GC_RIG" list --status=open --json 2>/dev/null || echo "[]")
 
 for dead in $disappeared; do
   orphans=$(printf '%s' "$open_beads_json" \

@@ -2175,7 +2175,7 @@ def create_gastown_review_assignment(gc_bin: str, workspace: GateWorkspace, *, e
     bead_id = find_first_key(extract_json_payload(output), ("id", "bead_id"))
     if bead_id:
         return bead_id
-    raise GateError(f"could not determine Gastown review assignment bead id from bd create output:\n{output}")
+    raise GateError(f"could not determine Gastown review assignment bead id from gc bd create output:\n{output}")
 
 
 def launch_gastown_review_leg(

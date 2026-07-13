@@ -141,7 +141,7 @@ agent. The pool thinks it's full. New work can't be dispatched.
 as your first action. `gc hook --claim --json` is the ONLY permitted discovery
 source — it checks assigned work first (session bead ID, runtime session name,
 then alias), falls through to routed pool work, and performs the atomic claim
-before you inspect the bead. Do NOT run `bd ready`, `bd list`, or any other
+before you inspect the bead. Do NOT run `gc bd ready`, `gc bd list`, or any other
 search to find work; that races other polecats. Work only the bead the claim
 block prints as `CLAIMED_BEAD_ID`.
 

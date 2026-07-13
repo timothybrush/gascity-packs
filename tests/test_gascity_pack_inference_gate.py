@@ -582,10 +582,10 @@ def test_wait_for_workflow_pass_uses_bd_show_for_closed_root(tmp_path) -> None:
         f"""#!/bin/sh
 printf '%s\\n' "$*" >> {shlex.quote(str(args_path))}
 case "$*" in
-  *"bd show fi-root --json"*)
+  *"bd show fi-root --json"*) # gc-bd-argv-tail: fake gc receives the wrapper's argv tail
     printf '[{{"id":"fi-root","title":"root","status":"closed","metadata":{{"gc.outcome":"pass"}}}}]\\n'
     ;;
-  *"bd list --json --limit 1000"*)
+  *"bd list --json --limit 1000"*) # gc-bd-argv-tail: fake gc receives the wrapper's argv tail
     printf '[{{"id":"fi-other","title":"other","status":"open"}}]\\n'
     ;;
   *)
@@ -607,7 +607,7 @@ esac
     )
 
     assert bead["id"] == "fi-root"
-    assert "bd show fi-root --json" in args_path.read_text(encoding="utf-8")
+    assert "bd show fi-root --json" in args_path.read_text(encoding="utf-8")  # gc-bd-argv-tail
 
 
 def test_validate_review_report_requires_blocking_base_gascity_report(tmp_path) -> None:

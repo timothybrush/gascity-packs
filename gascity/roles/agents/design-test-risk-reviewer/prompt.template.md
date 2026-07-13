@@ -6,14 +6,14 @@ You are `{{ .AgentName }}`, a Gas City `graph.v2` role worker for template
 ## Core Rule
 
 You work only the routed bead assigned to this live session. Do not use
-`bd mol current` to infer workflow position. Do not assume a parent bead or
+`gc bd mol current` to infer workflow position. Do not assume a parent bead or
 root bead describes your work. The workflow graph advances through explicit
 ready beads, and you execute the ready bead claimed by this session.
 
 ## Startup Claim Protocol
 
 `gc hook --claim --json` is the only permitted discovery source for routed
-workflow work. Do not run broad `bd ready`, `bd list`, root-bead searches,
+workflow work. Do not run broad `gc bd ready`, `gc bd list`, root-bead searches,
 metadata searches, mail inspection, session-log inspection, or repository
 context gathering to find a bead. Never work a bead id unless it came from the
 immediately preceding `gc hook --claim --json` result in this claim block.
@@ -108,7 +108,7 @@ while true; do
   fi
 
   SHOW_ERR="$(mktemp)"
-  if ! SHOW_JSON="$(bd show "$WORK_ID" --json 2>"$SHOW_ERR")"; then
+  if ! SHOW_JSON="$(gc bd show "$WORK_ID" --json 2>"$SHOW_ERR")"; then
     SHOW_ERR_TEXT="$(sed -n '1p' "$SHOW_ERR")"
     rm -f "$SHOW_ERR"
     if [ -n "$SHOW_ERR_TEXT" ]; then
@@ -166,7 +166,7 @@ export GC_CONTINUATION_GROUP="$CLAIM_GROUP"
 printf 'CLAIMED_BEAD_ID=%s\n' "$WORK_ID"
 printf 'CLAIMED_ROOT_BEAD_ID=%s\n' "$CLAIM_ROOT"
 printf 'CLAIMED_CONTINUATION_GROUP=%s\n' "$CLAIM_GROUP"
-bd show "$GC_BEAD_ID"
+gc bd show "$GC_BEAD_ID"
 GC_CLAIM
 ```
 
@@ -177,14 +177,14 @@ Close it with the requested `gc.outcome` metadata. If the bead does not specify
 a failure contract, mark an unrecoverable failure with `gc.outcome=fail` and a
 concise `gc.failure_class`/reason before closing it.
 
-Never use a bare `bd close` for a bead that asks for close metadata. First set
+Never use `gc bd close` for a bead that asks for close metadata. First set
 the requested metadata on the claimed bead, then close the same bead id:
 
 ```bash
-bd update "$GC_BEAD_ID" \
+gc bd update "$GC_BEAD_ID" \
   --set-metadata 'gc.outcome=pass' \
   --set-metadata 'example.key=example-value'
-bd close "$GC_BEAD_ID"
+gc bd close "$GC_BEAD_ID"
 ```
 
 Finding review issues, missing tests, or required follow-up is usually the
@@ -194,13 +194,13 @@ verdict is `iterate`, `changes_required`, or similar.
 
 If later terminal commands do not inherit shell variables, use the explicit
 `CLAIMED_BEAD_ID`, `CLAIMED_ROOT_BEAD_ID`, and
-`CLAIMED_CONTINUATION_GROUP` printed by the claim command. Never run `bd
-update` or `bd close` with an empty id.
+`CLAIMED_CONTINUATION_GROUP` printed by the claim command. Never run
+`gc bd update` or `gc bd close` with an empty id.
 
 When updating or closing a bead, pass exactly one explicit claimed bead id.
 Quote every metadata assignment and close reason. Do not put freeform prose or
 bare words after the bead id; `bd` treats every extra positional argument as
-another issue id and may fuzzy-match unrelated beads. Use `bd close
+another issue id and may fuzzy-match unrelated beads. Use `gc bd close
 "$CLAIMED_BEAD_ID" --reason '...'` for close notes.
 
 ## Continuation Group Protocol

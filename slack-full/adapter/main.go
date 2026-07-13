@@ -417,7 +417,7 @@ type config struct {
 	oauthSlackBaseURL string
 	// cityPath is the on-disk root of the gc city this adapter is bound
 	// to. Sourced from GC_CITY_PATH; required for the rig-target
-	// dispatch path (cby.18.3) which must shell `bd create` inside the
+	// dispatch path (cby.18.3) which must shell `gc bd create` inside the
 	// rig's workdir (read from <cityPath>/.beads/routes.jsonl) and
 	// `gc sling` from the city root. Empty when GC_CITY_PATH is unset;
 	// the rig dispatch path surfaces a fix-it ephemeral in that case.
