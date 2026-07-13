@@ -178,8 +178,9 @@ Close it with the requested `gc.outcome` metadata. If the bead does not specify
 a failure contract, mark an unrecoverable failure with `gc.outcome=fail` and a
 concise `gc.failure_class`/reason before closing it.
 
-Never use `gc bd close` for a bead that asks for close metadata. First set
-the requested metadata on the claimed bead, then close the same bead id:
+Never close a bead that asks for close metadata before setting that metadata.
+First set the requested metadata on the claimed bead, then close the same bead
+id:
 
 ```bash
 gc bd update "$GC_BEAD_ID" \

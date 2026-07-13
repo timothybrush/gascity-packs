@@ -3,6 +3,7 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 import re
+import shlex
 import subprocess
 
 
@@ -129,6 +130,8 @@ BD_SUBCOMMANDS = (
 )
 BD_SUBCOMMAND_PATTERN = "|".join(re.escape(command) for command in BD_SUBCOMMANDS)
 BARE_BD_COMMAND = re.compile(rf"\bbd[ \t]+(?:{BD_SUBCOMMAND_PATTERN})\b")
+BARE_BD_LEADING_FLAG = re.compile(r"\bbd[ \t]+-{1,2}[A-Za-z]")
+BARE_BD_DYNAMIC_COMMAND = re.compile(r'''\bbd[ \t]+(?:["']?\$\{?[A-Za-z_]|\$\()''')
 MULTILINE_BARE_BD_COMMAND = re.compile(
     rf"\bbd[ \t]*\r?\n[ \t]*(?:{BD_SUBCOMMAND_PATTERN})\b"
 )
@@ -137,9 +140,15 @@ BARE_BD_GO_EXEC = re.compile(
 )
 BARE_BD_PATH_CHECK = re.compile(r"\bcommand[ \t]+-v[ \t]+bd\b")
 BARE_BD_SERIALIZED_ARGV = re.compile(
-    rf'''(?:\[|\{{|=|:)[ \t]*["']bd["'][ \t]*,[ \t]*["'](?:{BD_SUBCOMMAND_PATTERN})["']'''
+    rf'''(?:\[|\{{|=|:)\s*["']bd["']\s*,\s*["'](?:{BD_SUBCOMMAND_PATTERN})["']'''
 )
 GC_BD_ARGV_TAIL_MARKER = "gc-bd-argv-tail"
+GC_BD_ARGV_TAIL_FIXTURE = Path("tests/test_gascity_pack_inference_gate.py")
+GC_BD_ARGV_TAIL_LINES = {
+    '*"bd show fi-root --json"*) # gc-bd-argv-tail: fake gc receives the wrapper\'s argv tail',
+    '*"bd list --json --limit 1000"*) # gc-bd-argv-tail: fake gc receives the wrapper\'s argv tail',
+    'assert "bd show fi-root --json" in args_path.read_text(encoding="utf-8")  # gc-bd-argv-tail',
+}
 
 
 def tracked_files() -> list[Path]:
@@ -166,32 +175,71 @@ def python_argv_violations(path: Path, text: str) -> list[str]:
     return violations
 
 
+def gc_routes_bd(line: str, bd_start: int) -> bool:
+    prefix = line[:bd_start]
+    gc_tokens = list(re.finditer(r"(?<![A-Za-z0-9_=/.-])gc\b", prefix))
+    if not gc_tokens:
+        return False
+    command_prefix = prefix[gc_tokens[-1].end() :].strip()
+    try:
+        tokens = shlex.split(command_prefix)
+    except ValueError:
+        return False
+
+    index = 0
+    while index < len(tokens):
+        token = tokens[index]
+        if token in {"--city", "--rig"}:
+            if index + 1 >= len(tokens):
+                return False
+            index += 2
+            continue
+        if token.startswith("--city=") or token.startswith("--rig="):
+            if token.endswith("="):
+                return False
+            index += 1
+            continue
+        return False
+    return True
+
+
+def intentional_gc_bd_argv_tail(relative: Path, line: str) -> bool:
+    return (
+        relative == GC_BD_ARGV_TAIL_FIXTURE
+        and GC_BD_ARGV_TAIL_MARKER in line
+        and line.strip() in GC_BD_ARGV_TAIL_LINES
+    )
+
+
 def bare_bd_violations(path: Path, text: str) -> list[str]:
     violations = []
     relative = path.relative_to(REPO_ROOT)
     for line_number, line in enumerate(text.splitlines(), start=1):
-        if GC_BD_ARGV_TAIL_MARKER in line:
-            continue
-        for match in BARE_BD_COMMAND.finditer(line):
-            before = line[: match.start()]
-            if re.search(r"\bgc[ \t]+$", before):
-                continue
-            violations.append(f"{relative}:{line_number}: {line.strip()}")
+        for pattern in (BARE_BD_COMMAND, BARE_BD_LEADING_FLAG, BARE_BD_DYNAMIC_COMMAND):
+            for match in pattern.finditer(line):
+                if gc_routes_bd(line, match.start()):
+                    continue
+                if intentional_gc_bd_argv_tail(relative, line):
+                    continue
+                violations.append(f"{relative}:{line_number}: {line.strip()}")
         if BARE_BD_GO_EXEC.search(line):
             violations.append(f"{relative}:{line_number}: direct bd argv")
         if BARE_BD_PATH_CHECK.search(line):
             violations.append(f"{relative}:{line_number}: checks bd instead of gc")
-        if BARE_BD_SERIALIZED_ARGV.search(line):
-            violations.append(f"{relative}:{line_number}: serialized argv starts with bd")
         if "BD_BIN" in line:
             violations.append(f"{relative}:{line_number}: BD_BIN bypasses gc bd routing")
     for match in MULTILINE_BARE_BD_COMMAND.finditer(text):
-        if re.search(r"\bgc[ \t]+$", text[: match.start()]):
+        line_start = text.rfind("\n", 0, match.start()) + 1
+        first_line = text[line_start : text.find("\n", match.start())]
+        if gc_routes_bd(first_line, match.start() - line_start):
             continue
         line_number = text.count("\n", 0, match.start()) + 1
         violations.append(f"{relative}:{line_number}: bd command is split across lines")
+    for match in BARE_BD_SERIALIZED_ARGV.finditer(text):
+        line_number = text.count("\n", 0, match.start()) + 1
+        violations.append(f"{relative}:{line_number}: serialized argv starts with bd")
     violations.extend(python_argv_violations(path, text))
-    return violations
+    return list(dict.fromkeys(violations))
 
 
 def test_shipped_pack_assets_route_beads_commands_through_gc() -> None:
@@ -213,4 +261,12 @@ def test_detector_covers_shell_multiline_and_serialized_argv_forms() -> None:
 
     assert bare_bd_violations(fixture, 'command = ["bd", "show"]')
     assert bare_bd_violations(fixture, "value=$(bd\n  list --json)")
+    assert bare_bd_violations(fixture, "bd --dir /tmp/rig list --json")
+    assert bare_bd_violations(fixture, 'bd "$verb" --json')
+    assert bare_bd_violations(fixture, 'command = ["bd",\n "show"]')
+    assert bare_bd_violations(fixture, "bd show x  # gc-bd-argv-tail")
+    assert bare_bd_violations(fixture, "echo gc; bd show x")
+    assert bare_bd_violations(fixture, "GC_BIN=gc bd show x")
     assert not bare_bd_violations(fixture, 'command = ["gc", "bd", "show"]')
+    assert not bare_bd_violations(fixture, "gc --city /tmp/city bd list --json")
+    assert not bare_bd_violations(fixture, "gc --rig demo bd show demo-1")
