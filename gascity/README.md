@@ -37,6 +37,11 @@ and your project added as a rig (`gc rig add .` inside the repo). See the
    source = "https://github.com/gastownhall/gascity-packs.git//gascity/roles"
    ```
 
+   Both imports are required. The rig-scoped roles pack supplies agents but,
+   by design, rig imports do not register city commands; importing roles alone
+   renders prompts that reference `gc gc claim` without installing that
+   command. Keep the top-level Gas City pack imported at city scope.
+
    (Contributors hacking on packs can point this source at a local clone.)
 
 2. Create a bead describing what you want built, and sling the starter

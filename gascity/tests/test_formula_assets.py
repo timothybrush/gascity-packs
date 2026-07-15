@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import os
 import json
+import os
 import pathlib
 import re
 import subprocess
@@ -708,20 +708,25 @@ class FormulaAssetTests(unittest.TestCase):
 
         for required in (
             "only work-discovery command",
+            "may have assigned work before returning",
             "gc hook --claim --drain-ack --json",
-            "`bd mol current`",
+            "`gc bd mol current`",
             "CLAIMED_BEAD_ID",
+            "CLAIMED_ROOT_BEAD_ID",
+            "CLAIMED_CONTINUATION_GROUP",
             "gc runtime drain-ack",
-            "continuation-group work",
+            "An empty continuation group is a hard session boundary",
+            "Never ask a human whether to proceed after a successful claim",
+            "Every successful claim result is authoritative",
             "Set required metadata before closing same claimed bead",
-            'bd update "$CLAIMED_BEAD_ID"',
+            'gc bd update "$CLAIMED_BEAD_ID"',
+            'gc bd close "$CLAIMED_BEAD_ID"',
             "Review findings, missing tests, or follow-up usually are output",
-            "After close, run `gc gc claim` again",
+            "After close, inspect `CLAIMED_CONTINUATION_GROUP`",
             'Never claim "drained" without acknowledgement',
         ):
             with self.subTest(required=required):
                 self.assertIn(required, text)
-        self.assertNotIn("bd update \"$WORK_ID\" --claim --json", text)
         self.assertNotIn("GC_CLAIM", text)
 
         for agent_name in ROLE_AGENTS:
@@ -744,30 +749,21 @@ class FormulaAssetTests(unittest.TestCase):
                 "#!/bin/sh\n"
                 "if [ \"$1\" = hook ] && [ \"$2\" = --claim ] && [ \"$3\" = --drain-ack ] && [ \"$4\" = --json ]; then\n"
                 "  printf '%s\\n' '{\"action\":\"work\",\"bead_id\":\"bd-123\",\"assignee\":\"worker\",\"route\":\"gc.implementation-worker\"}'\n"
-                "else\n"
-                "  exit 2\n"
-                "fi\n",
-                encoding="utf-8",
-            )
-            fake_gc.chmod(0o755)
-            fake_bd = bin_dir / "bd"
-            fake_bd.write_text(
-                "#!/bin/sh\n"
-                "if [ \"$1\" = show ] && [ \"$2\" = bd-123 ] && [ \"$3\" = --json ]; then\n"
+                "elif [ \"$1\" = bd ] && [ \"$2\" = show ] && [ \"$3\" = bd-123 ] && [ \"$4\" = --json ]; then\n"
                 "  printf '%s\\n' '{\"id\":\"bd-123\",\"status\":\"in_progress\",\"assignee\":\"worker\",\"metadata\":{\"gc.routed_to\":\"gc.implementation-worker\",\"gc.root_bead_id\":\"root-1\",\"gc.continuation_group\":\"group-1\"}}'\n"
                 "else\n"
                 "  exit 2\n"
                 "fi\n",
                 encoding="utf-8",
             )
-            fake_bd.chmod(0o755)
+            fake_gc.chmod(0o755)
             env = {
                 **os.environ,
                 "BEADS_ACTOR": "worker",
                 "GC_AGENT": "gc.implementation-worker",
                 "GC_PACK_DIR": str(root),
                 "GC_PACK_NAME": "gc",
-                "PATH": f"{bin_dir}:{os.environ['PATH']}",
+                "PATH": f"{bin_dir}:/usr/bin:/bin",
             }
             result = subprocess.run([str(command)], capture_output=True, env=env, text=True)
 
@@ -811,20 +807,317 @@ class FormulaAssetTests(unittest.TestCase):
                 encoding="utf-8",
             )
             fake_gc.chmod(0o755)
-            fake_bd = bin_dir / "bd"
-            fake_bd.write_text("#!/bin/sh\nexit 99\n", encoding="utf-8")
-            fake_bd.chmod(0o755)
             env = {
                 **os.environ,
                 "BEADS_ACTOR": "worker",
                 "GC_PACK_DIR": str(root),
                 "GC_PACK_NAME": "gc",
-                "PATH": f"{bin_dir}:{os.environ['PATH']}",
+                "PATH": f"{bin_dir}:/usr/bin:/bin",
             }
             result = subprocess.run([str(command)], capture_output=True, env=env, text=True)
 
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(json.loads(result.stdout), {"action": "drain"})
+
+    def test_city_claim_command_bounds_ambiguous_hook_failures_without_drain_ack(
+        self,
+    ) -> None:
+        root = pathlib.Path(__file__).resolve().parents[1]
+        command = root / "commands" / "claim" / "run.sh"
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = pathlib.Path(tmp)
+            bin_dir = tmp_path / "bin"
+            bin_dir.mkdir()
+            calls = tmp_path / "calls"
+            fake_gc = bin_dir / "gc"
+            fake_gc.write_text(
+                "#!/bin/sh\n"
+                "printf '%s\\n' \"$*\" >>\"$GC_TEST_CALLS\"\n"
+                "if [ \"$1\" = hook ]; then\n"
+                "  printf '%s\\n' '{\"action\":\"drain\"}'\n"
+                "  echo 'permanent hook failure' >&2\n"
+                "  exit 7\n"
+                "fi\n"
+                "if [ \"$1\" = runtime ] && [ \"$2\" = drain-ack ]; then\n"
+                "  exit 0\n"
+                "fi\n"
+                "exit 2\n",
+                encoding="utf-8",
+            )
+            fake_gc.chmod(0o755)
+            fake_sleep = bin_dir / "sleep"
+            fake_sleep.write_text("#!/bin/sh\n/bin/sleep 0.05\n", encoding="utf-8")
+            fake_sleep.chmod(0o755)
+            env = {
+                **os.environ,
+                "BEADS_ACTOR": "worker",
+                "GC_AGENT": "gc.implementation-worker",
+                "GC_PACK_DIR": str(root),
+                "GC_PACK_NAME": "gc",
+                "GC_TEST_CALLS": str(calls),
+                "PATH": f"{bin_dir}:/usr/bin:/bin",
+            }
+            result = subprocess.run(
+                [str(command)], capture_output=True, env=env, text=True, timeout=2
+            )
+            call_lines = calls.read_text(encoding="utf-8").splitlines()
+
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("permanent hook failure", result.stderr)
+        self.assertIn("after 3 attempts", result.stderr)
+        self.assertEqual(call_lines.count("hook --claim --drain-ack --json"), 3)
+        self.assertNotIn("runtime drain-ack", call_lines)
+
+    def test_city_claim_command_drain_acks_missing_assignee_configuration(self) -> None:
+        root = pathlib.Path(__file__).resolve().parents[1]
+        command = root / "commands" / "claim" / "run.sh"
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = pathlib.Path(tmp)
+            bin_dir = tmp_path / "bin"
+            bin_dir.mkdir()
+            calls = tmp_path / "calls"
+            fake_gc = bin_dir / "gc"
+            fake_gc.write_text(
+                "#!/bin/sh\n"
+                "printf '%s\\n' \"$*\" >>\"$GC_TEST_CALLS\"\n"
+                "if [ \"$1\" = runtime ] && [ \"$2\" = drain-ack ]; then exit 0; fi\n"
+                "exit 2\n",
+                encoding="utf-8",
+            )
+            fake_gc.chmod(0o755)
+            env = {
+                **os.environ,
+                "GC_PACK_DIR": str(root),
+                "GC_PACK_NAME": "gc",
+                "GC_TEST_CALLS": str(calls),
+                "PATH": f"{bin_dir}:/usr/bin:/bin",
+            }
+            for key in ("BEADS_ACTOR", "GC_SESSION_NAME", "GC_SESSION_ID", "GC_AGENT"):
+                env.pop(key, None)
+            result = subprocess.run([str(command)], capture_output=True, env=env, text=True)
+            call_lines = calls.read_text(encoding="utf-8").splitlines()
+
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn("CONFIG_REJECTED", result.stderr)
+        self.assertEqual(call_lines, ["runtime drain-ack"])
+
+    def test_city_claim_command_drain_acks_missing_python_configuration(self) -> None:
+        root = pathlib.Path(__file__).resolve().parents[1]
+        command = root / "commands" / "claim" / "run.sh"
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = pathlib.Path(tmp)
+            bin_dir = tmp_path / "bin"
+            bin_dir.mkdir()
+            calls = tmp_path / "calls"
+            fake_gc = bin_dir / "gc"
+            fake_gc.write_text(
+                "#!/bin/sh\n"
+                "printf '%s\\n' \"$*\" >>\"$GC_TEST_CALLS\"\n"
+                "if [ \"$1\" = runtime ] && [ \"$2\" = drain-ack ]; then exit 0; fi\n"
+                "exit 2\n",
+                encoding="utf-8",
+            )
+            fake_gc.chmod(0o755)
+            env = {
+                **os.environ,
+                "BEADS_ACTOR": "worker",
+                "GC_PACK_DIR": str(root),
+                "GC_PACK_NAME": "gc",
+                "GC_TEST_CALLS": str(calls),
+                "PATH": str(bin_dir),
+            }
+            result = subprocess.run([str(command)], capture_output=True, env=env, text=True)
+            call_lines = calls.read_text(encoding="utf-8").splitlines()
+
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn("CONFIG_REJECTED", result.stderr)
+        self.assertEqual(call_lines, ["runtime drain-ack"])
+
+    def test_city_claim_command_reports_failed_drain_ack(self) -> None:
+        root = pathlib.Path(__file__).resolve().parents[1]
+        command = root / "commands" / "claim" / "run.sh"
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = pathlib.Path(tmp)
+            bin_dir = tmp_path / "bin"
+            bin_dir.mkdir()
+            calls = tmp_path / "calls"
+            fake_gc = bin_dir / "gc"
+            fake_gc.write_text(
+                "#!/bin/sh\n"
+                "printf '%s\\n' \"$*\" >>\"$GC_TEST_CALLS\"\n"
+                "if [ \"$1\" = runtime ] && [ \"$2\" = drain-ack ]; then exit 9; fi\n"
+                "exit 2\n",
+                encoding="utf-8",
+            )
+            fake_gc.chmod(0o755)
+            env = {
+                **os.environ,
+                "GC_PACK_DIR": str(root),
+                "GC_PACK_NAME": "gc",
+                "GC_TEST_CALLS": str(calls),
+                "PATH": f"{bin_dir}:/usr/bin:/bin",
+            }
+            for key in ("BEADS_ACTOR", "GC_SESSION_NAME", "GC_SESSION_ID", "GC_AGENT"):
+                env.pop(key, None)
+            result = subprocess.run([str(command)], capture_output=True, env=env, text=True)
+            call_lines = calls.read_text(encoding="utf-8").splitlines()
+
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("CONFIG_REJECTED", result.stderr)
+        self.assertIn("DRAIN_ACK_FAILED", result.stderr)
+        self.assertEqual(call_lines, ["runtime drain-ack"])
+
+    def test_city_claim_command_termination_signal_stops_before_retry(self) -> None:
+        root = pathlib.Path(__file__).resolve().parents[1]
+        command = root / "commands" / "claim" / "run.sh"
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = pathlib.Path(tmp)
+            bin_dir = tmp_path / "bin"
+            bin_dir.mkdir()
+            calls = tmp_path / "calls"
+            fake_gc = bin_dir / "gc"
+            fake_gc.write_text(
+                "#!/bin/sh\n"
+                "printf '%s\\n' \"$*\" >>\"$GC_TEST_CALLS\"\n"
+                "if [ \"$1\" = hook ]; then\n"
+                "  kill -TERM \"$PPID\"\n"
+                "  exit 7\n"
+                "fi\n"
+                "exit 2\n",
+                encoding="utf-8",
+            )
+            fake_gc.chmod(0o755)
+            env = {
+                **os.environ,
+                "BEADS_ACTOR": "worker",
+                "GC_AGENT": "gc.implementation-worker",
+                "GC_PACK_DIR": str(root),
+                "GC_PACK_NAME": "gc",
+                "GC_TEST_CALLS": str(calls),
+                "PATH": f"{bin_dir}:/usr/bin:/bin",
+            }
+            result = subprocess.run(
+                [str(command)], capture_output=True, env=env, text=True, timeout=2
+            )
+            call_lines = calls.read_text(encoding="utf-8").splitlines()
+
+        self.assertEqual(result.returncode, 143, result.stderr)
+        self.assertEqual(call_lines, ["hook --claim --drain-ack --json"])
+
+    def test_city_claim_command_preserves_owned_route_mismatch_for_recovery(self) -> None:
+        root = pathlib.Path(__file__).resolve().parents[1]
+        command = root / "commands" / "claim" / "run.sh"
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = pathlib.Path(tmp)
+            bin_dir = tmp_path / "bin"
+            bin_dir.mkdir()
+            calls = tmp_path / "calls"
+            fake_gc = bin_dir / "gc"
+            fake_gc.write_text(
+                "#!/bin/sh\n"
+                "printf '%s\\n' \"$*\" >>\"$GC_TEST_CALLS\"\n"
+                "if [ \"$1\" = hook ]; then\n"
+                "  printf '%s\\n' '{\"action\":\"work\",\"bead_id\":\"bd-123\",\"assignee\":\"worker\",\"route\":\"gc.wrong-worker\"}'\n"
+                "elif [ \"$1\" = bd ] && [ \"$2\" = show ]; then\n"
+                "  printf '%s\\n' '{\"id\":\"bd-123\",\"status\":\"in_progress\",\"assignee\":\"worker\",\"metadata\":{\"gc.routed_to\":\"gc.wrong-worker\",\"gc.root_bead_id\":\"root-1\",\"gc.continuation_group\":\"group-1\"}}'\n"
+                "elif [ \"$1\" = bd ] && [ \"$2\" = update ]; then\n"
+                "  exit 0\n"
+                "elif [ \"$1\" = runtime ] && [ \"$2\" = drain-ack ]; then\n"
+                "  exit 0\n"
+                "else\n"
+                "  exit 2\n"
+                "fi\n",
+                encoding="utf-8",
+            )
+            fake_gc.chmod(0o755)
+            fake_sleep = bin_dir / "sleep"
+            fake_sleep.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            fake_sleep.chmod(0o755)
+            env = {
+                **os.environ,
+                "BEADS_ACTOR": "worker",
+                "GC_AGENT": "gc.implementation-worker",
+                "GC_PACK_DIR": str(root),
+                "GC_PACK_NAME": "gc",
+                "GC_TEST_CALLS": str(calls),
+                "PATH": f"{bin_dir}:/usr/bin:/bin",
+            }
+            result = subprocess.run(
+                [str(command)],
+                capture_output=True,
+                env=env,
+                text=True,
+            )
+            call_lines = calls.read_text(encoding="utf-8").splitlines()
+
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertEqual(result.stdout, "")
+        self.assertEqual(call_lines.count("hook --claim --drain-ack --json"), 1)
+        self.assertEqual(
+            call_lines.count(" ".join(("b" + "d", "show", "bd-123", "--json"))),
+            1,
+        )
+        self.assertEqual(len(call_lines), 2)
+
+    def test_city_claim_command_preserves_unreadable_claim_after_bounded_retries(
+        self,
+    ) -> None:
+        root = pathlib.Path(__file__).resolve().parents[1]
+        command = root / "commands" / "claim" / "run.sh"
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = pathlib.Path(tmp)
+            bin_dir = tmp_path / "bin"
+            bin_dir.mkdir()
+            calls = tmp_path / "calls"
+            fake_gc = bin_dir / "gc"
+            fake_gc.write_text(
+                "#!/bin/sh\n"
+                "printf '%s\\n' \"$*\" >>\"$GC_TEST_CALLS\"\n"
+                "if [ \"$1\" = hook ]; then\n"
+                "  printf '%s\\n' '{\"action\":\"work\",\"bead_id\":\"bd-123\",\"assignee\":\"worker\",\"route\":\"gc.implementation-worker\"}'\n"
+                "  exit 0\n"
+                "elif [ \"$1\" = bd ] && [ \"$2\" = show ]; then\n"
+                "  printf '%s\\n' '{}'\n"
+                "  exit 0\n"
+                "elif [ \"$1\" = bd ] && [ \"$2\" = update ]; then\n"
+                "  exit 0\n"
+                "elif [ \"$1\" = runtime ] && [ \"$2\" = drain-ack ]; then\n"
+                "  exit 0\n"
+                "fi\n"
+                "exit 2\n",
+                encoding="utf-8",
+            )
+            fake_gc.chmod(0o755)
+            fake_sleep = bin_dir / "sleep"
+            fake_sleep.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            fake_sleep.chmod(0o755)
+            env = {
+                **os.environ,
+                "BEADS_ACTOR": "worker",
+                "GC_AGENT": "gc.implementation-worker",
+                "GC_PACK_DIR": str(root),
+                "GC_PACK_NAME": "gc",
+                "GC_TEST_CALLS": str(calls),
+                "PATH": f"{bin_dir}:/usr/bin:/bin",
+            }
+            result = subprocess.run(
+                [str(command)], capture_output=True, env=env, text=True, timeout=2
+            )
+            call_lines = calls.read_text(encoding="utf-8").splitlines()
+
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn("incomplete bead record", result.stderr)
+        self.assertEqual(call_lines.count("hook --claim --drain-ack --json"), 1)
+        show_call = " ".join(("b" + "d", "show", "bd-123", "--json"))
+        self.assertEqual(call_lines.count(show_call), 3)
+        self.assertEqual(len(call_lines), 4)
 
 
     def test_third_party_agents_include_work_claim_protocol(self) -> None:
