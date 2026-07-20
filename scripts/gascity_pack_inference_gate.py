@@ -1901,6 +1901,7 @@ def resolve_artifact_path(value: str, *, base: Path) -> Path:
 
 def build_result_candidates(rig_dir: Path, beads: Sequence[Mapping[str, Any]]) -> list[Path]:
     candidates: list[Path] = []
+    rig_root_from_implementation_summary = False
     for bead in beads:
         metadata = bead.get("metadata")
         if not isinstance(metadata, dict):
@@ -1915,7 +1916,15 @@ def build_result_candidates(rig_dir: Path, beads: Sequence[Mapping[str, Any]]) -
                 continue
             for ancestor in Path(value.strip()).parents:
                 if ancestor.name == ".gc":
-                    candidates.append(ancestor.parent)
+                    implementation_root = ancestor.parent
+                    candidates.append(implementation_root)
+                    try:
+                        rig_root_from_implementation_summary = (
+                            rig_root_from_implementation_summary
+                            or implementation_root.resolve() == rig_dir.resolve()
+                        )
+                    except OSError:
+                        pass
                     break
     worktrees_dir = rig_dir / "worktrees"
     if worktrees_dir.is_dir():
@@ -1928,7 +1937,7 @@ def build_result_candidates(rig_dir: Path, beads: Sequence[Mapping[str, Any]]) -
             resolved = candidate.resolve()
         except OSError:
             continue
-        if resolved == rig_dir.resolve():
+        if resolved == rig_dir.resolve() and not rig_root_from_implementation_summary:
             continue
         if resolved in seen or not resolved.is_dir():
             continue
@@ -2627,14 +2636,15 @@ def run_build_gate(
         poll_interval=poll_interval,
     )
     validate_build_basic_artifacts(root_bead, rig_dir=workspace.rig_dir, env=env, validator_source=pack_spec.validator_source)
+    workflow_beads = list_beads(gc_bin, workspace, env=env)
     validate_build_basic_result(
         workspace.rig_dir,
-        list_beads(gc_bin, workspace, env=env),
+        [root_bead, *workflow_beads],
         env=env,
         timeout=parse_duration("2m"),
     )
     validate_required_routes(
-        list_beads(gc_bin, workspace, env=env),
+        workflow_beads,
         pack_spec.required_build_routes,
         context=f"{pack_spec.name} build gate",
     )

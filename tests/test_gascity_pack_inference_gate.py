@@ -968,6 +968,74 @@ def slugify(value: str) -> str:
     assert selected == worktree
 
 
+def test_validate_build_basic_result_accepts_completed_code_in_rc_rig_root(tmp_path) -> None:
+    rig_dir = tmp_path / "fixture"
+    gascity_pack_inference_gate.write_build_basic_fixture(rig_dir)
+    (rig_dir / "slugger.py").write_text(
+        """\
+import re
+
+
+def slugify(value: str) -> str:
+    parts = re.findall(r"[a-z0-9]+", value.lower())
+    return "-".join(parts)
+""",
+        encoding="utf-8",
+    )
+    summary_path = rig_dir / ".gc" / "inference-gate" / "build-basic" / "implementation-summary.md"
+    summary_path.parent.mkdir(parents=True)
+    summary_path.write_text("implementation complete\n", encoding="utf-8")
+
+    selected = gascity_pack_inference_gate.validate_build_basic_result(
+        rig_dir,
+        [
+            {
+                "metadata": {
+                    "gc.work_dir": str(rig_dir),
+                    "gc.build.implementation_summary_path": str(summary_path),
+                }
+            }
+        ],
+        env={},
+        timeout=30,
+    )
+
+    assert selected == rig_dir
+
+
+def test_run_build_gate_includes_closed_root_metadata_in_code_validation(tmp_path, monkeypatch) -> None:
+    workspace = gate_workspace(tmp_path)
+    root_bead = {
+        "id": "fi-root",
+        "status": "closed",
+        "metadata": {"gc.build.implementation_summary_path": str(workspace.rig_dir / ".gc" / "summary.md")},
+    }
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(gascity_pack_inference_gate, "launch_build_formula", lambda *_args, **_kwargs: "fi-root")
+    monkeypatch.setattr(gascity_pack_inference_gate, "wait_for_workflow_pass", lambda *_args, **_kwargs: root_bead)
+    monkeypatch.setattr(gascity_pack_inference_gate, "validate_build_basic_artifacts", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(gascity_pack_inference_gate, "list_beads", lambda *_args, **_kwargs: [{"id": "open-child"}])
+    monkeypatch.setattr(gascity_pack_inference_gate, "validate_required_routes", lambda *_args, **_kwargs: None)
+
+    def capture_result(_rig_dir, beads, **_kwargs):
+        captured["beads"] = beads
+        return workspace.rig_dir
+
+    monkeypatch.setattr(gascity_pack_inference_gate, "validate_build_basic_result", capture_result)
+
+    gascity_pack_inference_gate.run_build_gate(
+        "gc",
+        workspace,
+        env={},
+        pack_spec=gascity_pack_inference_gate.PACK_SPECS["gascity"],
+        timeout=30,
+        poll_interval=1,
+    )
+
+    assert captured["beads"] == [root_bead, {"id": "open-child"}]
+
+
 def test_validate_build_basic_result_rejects_launcher_only_false_pass(tmp_path) -> None:
     rig_dir = tmp_path / "fixture"
     worktree = rig_dir / "worktrees" / "fi-source"
