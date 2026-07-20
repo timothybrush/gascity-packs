@@ -930,6 +930,44 @@ def slugify(value: str) -> str:
     assert selected == worktree
 
 
+def test_validate_build_basic_result_finds_nested_worktree_from_rc_metadata(tmp_path) -> None:
+    rig_dir = tmp_path / "fixture"
+    launcher_dir = rig_dir / "fi-prepare-item-worktree"
+    worktree = launcher_dir / "worktrees" / "fi-source"
+    gascity_pack_inference_gate.write_build_basic_fixture(rig_dir)
+    gascity_pack_inference_gate.write_build_basic_fixture(worktree)
+    (worktree / "slugger.py").write_text(
+        """\
+import re
+
+
+def slugify(value: str) -> str:
+    parts = re.findall(r"[a-z0-9]+", value.lower())
+    return "-".join(parts)
+""",
+        encoding="utf-8",
+    )
+    summary_path = worktree / ".gc" / "inference-gate" / "build-basic" / "implementation-summary.md"
+    summary_path.parent.mkdir(parents=True)
+    summary_path.write_text("implementation complete\n", encoding="utf-8")
+
+    selected = gascity_pack_inference_gate.validate_build_basic_result(
+        rig_dir,
+        [
+            {
+                "metadata": {
+                    "gc.work_dir": str(launcher_dir),
+                    "gc.implementation.summary_path": str(summary_path),
+                }
+            }
+        ],
+        env={},
+        timeout=30,
+    )
+
+    assert selected == worktree
+
+
 def test_validate_build_basic_result_rejects_launcher_only_false_pass(tmp_path) -> None:
     rig_dir = tmp_path / "fixture"
     worktree = rig_dir / "worktrees" / "fi-source"

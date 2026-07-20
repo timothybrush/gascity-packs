@@ -1905,10 +1905,18 @@ def build_result_candidates(rig_dir: Path, beads: Sequence[Mapping[str, Any]]) -
         metadata = bead.get("metadata")
         if not isinstance(metadata, dict):
             continue
-        for key in ("work_dir", "gc.build.work_dir", "gc.implementation.work_dir"):
+        for key in ("work_dir", "gc.work_dir", "gc.build.work_dir", "gc.implementation.work_dir"):
             value = metadata.get(key)
             if isinstance(value, str) and value.strip():
                 candidates.append(Path(value.strip()))
+        for key in ("gc.implementation.summary_path", "gc.build.implementation_summary_path"):
+            value = metadata.get(key)
+            if not isinstance(value, str) or not value.strip():
+                continue
+            for ancestor in Path(value.strip()).parents:
+                if ancestor.name == ".gc":
+                    candidates.append(ancestor.parent)
+                    break
     worktrees_dir = rig_dir / "worktrees"
     if worktrees_dir.is_dir():
         candidates.extend(sorted(path for path in worktrees_dir.iterdir() if path.is_dir()))
