@@ -1851,6 +1851,7 @@ def show_bead(gc_bin: str, workspace: GateWorkspace, bead_id: str, *, env: Mappi
                 "show",
                 bead_id,
                 "--json",
+                "--include-comments",
             ],
             env=env,
             timeout=parse_duration("30s"),

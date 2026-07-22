@@ -782,6 +782,7 @@ esac
 
     assert bead["id"] == "fi-root"
     assert "bd show fi-root --json" in args_path.read_text(encoding="utf-8")  # gc-bd-argv-tail
+    assert "--include-comments" in args_path.read_text(encoding="utf-8")
 
 
 def test_validate_review_report_requires_blocking_base_gascity_report(tmp_path) -> None:
@@ -889,6 +890,13 @@ def test_smoke_task_requests_the_required_acknowledgment_on_one_line() -> None:
 def test_require_smoke_ack_accepts_the_pack_specific_sentinel() -> None:
     gascity_pack_inference_gate.require_smoke_ack(
         {"notes": "PACK_SMOKE_OK: superpowers\n"},
+        gascity_pack_inference_gate.PACK_SPECS["superpowers"],
+    )
+
+
+def test_require_smoke_ack_accepts_the_pack_specific_comment() -> None:
+    gascity_pack_inference_gate.require_smoke_ack(
+        {"comments": [{"text": "PACK_SMOKE_OK: superpowers"}]},
         gascity_pack_inference_gate.PACK_SPECS["superpowers"],
     )
 
