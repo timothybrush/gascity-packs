@@ -1080,10 +1080,19 @@ def beads_module_version(build_metadata: str) -> str | None:
     return None
 
 
+def normalized_beads_module_version(version: str) -> str:
+    """Ignore the release archive's build-state marker, not version drift."""
+    return version.removesuffix("+dirty")
+
+
 def require_matching_beads_modules(gc_metadata: str, bd_metadata: str) -> None:
     gc_version = beads_module_version(gc_metadata)
     bd_version = beads_module_version(bd_metadata)
-    if not gc_version or not bd_version or gc_version == bd_version:
+    if (
+        not gc_version
+        or not bd_version
+        or normalized_beads_module_version(gc_version) == normalized_beads_module_version(bd_version)
+    ):
         return
     raise GateError(
         "incompatible gc/bd beads modules: "

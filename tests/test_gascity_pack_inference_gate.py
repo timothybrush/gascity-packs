@@ -291,7 +291,7 @@ def test_beads_module_version_guard_rejects_gc_bd_schema_drift() -> None:
 
 def test_beads_module_version_guard_accepts_matching_modules() -> None:
     gc_metadata = "dep\tgithub.com/steveyegge/beads\tv1.1.0\th1:abc\n"
-    bd_metadata = "mod\tgithub.com/steveyegge/beads\tv1.1.0\th1:abc\n"
+    bd_metadata = "mod\tgithub.com/steveyegge/beads\tv1.1.0+dirty\th1:abc\n"
 
     gascity_pack_inference_gate.require_matching_beads_modules(gc_metadata, bd_metadata)
 
