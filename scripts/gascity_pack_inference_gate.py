@@ -34,10 +34,14 @@ REVIEW_GATE = "review"
 BUILD_GATE = "build"
 BUILD_BASIC_GATE = "build-basic"
 GASTOWN_ORCHESTRATION_GATE = "gastown-orchestration"
+SMOKE_GATE = "smoke"
 ALL_GATE = "all"
 GASCITY_PACK = "gascity"
 GASTOWN_PACK = "gastown"
+MODEL_SMOKE_PACKS = ("superpowers", "compound-engineering", "gstack", "bmad", GASTOWN_PACK)
+MODEL_SMOKE_GLOBAL_TIMEOUT = "25m"
 GASCITY_REMOTE_SOURCE = "https://github.com/gastownhall/gascity.git"
+BEADS_MODULE = "github.com/steveyegge/beads"
 REVIEW_SUBJECT_PATH = Path(".gc/inference-gate/review-subject.diff")
 REVIEW_REPORT_PATH = Path(".gc/inference-gate/review-report.md")
 REVIEW_REPORT_METADATA_KEYS = (
@@ -61,6 +65,7 @@ BUILD_TITLE = "gascity pack inference gate: build-basic"
 BUILD_SOURCE_TITLE = "Implement slugify and make pytest pass"
 GASTOWN_REVIEW_TITLE = "Gastown orchestration gate: review leg"
 GASTOWN_REVIEW_ASSIGNMENT_TITLE = "Review Gastown orchestration gate fixture"
+SMOKE_TITLE_PREFIX = "RC model smoke"
 GASTOWN_ALWAYS_ON_AGENTS = ("mayor", "deacon", "boot", "witness")
 GASTOWN_FORMULA_CONTRACTS = {
     "mol-review-leg": (
@@ -518,6 +523,7 @@ class PackSpec:
     required_review_routes: tuple[str, ...] = ()
     required_build_routes: tuple[str, ...] = ()
     gastown: bool = False
+    smoke_agent: str | None = None
 
 
 class GateError(RuntimeError):
@@ -572,6 +578,7 @@ def make_pack_specs() -> dict[str, PackSpec]:
                 "superpowers.code-quality-reviewer",
                 "superpowers.finisher",
             ),
+            smoke_agent="superpowers.brainstorming",
         ),
         "compound-engineering": PackSpec(
             name="compound-engineering",
@@ -598,6 +605,7 @@ def make_pack_specs() -> dict[str, PackSpec]:
                 "compound-engineering.ce-code-review-synthesizer",
                 "compound-engineering.ce-compound",
             ),
+            smoke_agent="compound-engineering.ce-brainstorm",
         ),
         "gstack": PackSpec(
             name="gstack",
@@ -625,6 +633,7 @@ def make_pack_specs() -> dict[str, PackSpec]:
                 "gstack.security-officer",
                 "gstack.release-engineer",
             ),
+            smoke_agent="gstack.office-hours",
         ),
         "bmad": PackSpec(
             name="bmad",
@@ -651,6 +660,7 @@ def make_pack_specs() -> dict[str, PackSpec]:
                 "bmad.story-implementer",
                 "bmad.bmad-review-synthesizer",
             ),
+            smoke_agent="bmad.prd-writer",
         ),
         GASTOWN_PACK: PackSpec(
             name=GASTOWN_PACK,
@@ -671,13 +681,14 @@ def make_pack_specs() -> dict[str, PackSpec]:
                 "mol-shutdown-dance",
             ),
             gastown=True,
+            smoke_agent="gastown.polecat",
         ),
     }
 
 
 PACK_SPECS = make_pack_specs()
 METHODOLOGY_PACKS = ("superpowers", "compound-engineering", "gstack", "bmad")
-SUPPORTED_PACK_CHOICES = (*PACK_SPECS.keys(), "methodology", "all-supported")
+SUPPORTED_PACK_CHOICES = (*PACK_SPECS.keys(), "methodology", "model-smoke", "all-supported")
 
 
 def toml_string(value: str | Path) -> str:
@@ -735,13 +746,22 @@ def expand_gate_selection(selection: str, pack_spec: PackSpec | None = None) -> 
     spec = pack_spec or PACK_SPECS[GASCITY_PACK]
     if selection == ALL_GATE:
         return list(spec.default_gates)
+    if selection == SMOKE_GATE and spec.smoke_agent:
+        return [SMOKE_GATE]
     if selection == BUILD_GATE and spec.name == GASCITY_PACK:
         return [BUILD_BASIC_GATE]
     if selection == BUILD_BASIC_GATE and spec.name != GASCITY_PACK:
         raise ValueError(f"{selection!r} is only valid for the gascity pack; use 'build' for {spec.name}")
     if selection in spec.default_gates:
         return [selection]
-    allowed = sorted({*spec.default_gates, ALL_GATE, *(("build",) if spec.build_formula else ())})
+    allowed = sorted(
+        {
+            *spec.default_gates,
+            ALL_GATE,
+            *(("build",) if spec.build_formula else ()),
+            *((SMOKE_GATE,) if spec.smoke_agent else ()),
+        }
+    )
     raise ValueError(f"invalid gate {selection!r} for pack {spec.name}; choose one of {', '.join(allowed)}")
 
 
@@ -754,6 +774,7 @@ def write_gate_workspace(
     pack_binding: str = "gc",
     pack_name: str = GASCITY_PACK,
     gastown: bool = False,
+    include_pack_at_city_scope: bool = True,
     city_name: str,
     rig_name: str,
 ) -> GateWorkspace:
@@ -850,7 +871,8 @@ def write_gate_workspace(
     ]
     for binding, source in builtin_pack_sources().items():
         pack_lines.extend([f"[imports.{binding}]", f"source = {toml_string(source)}", ""])
-    pack_lines.extend([f"[imports.{pack_binding}]", f"source = {toml_string(pack_source)}", ""])
+    if include_pack_at_city_scope:
+        pack_lines.extend([f"[imports.{pack_binding}]", f"source = {toml_string(pack_source)}", ""])
     (city_dir / "pack.toml").write_text("\n".join(pack_lines), encoding="utf-8")
 
     materialize_pack_check_scripts(validator_source, rig_dir)
@@ -1012,7 +1034,13 @@ def write_supervisor_config(gc_home: Path) -> None:
     )
 
 
-def build_gate_env(gc_bin: str, workspace: GateWorkspace, inherited: Mapping[str, str] | None = None) -> dict[str, str]:
+def build_gate_env(
+    gc_bin: str,
+    workspace: GateWorkspace,
+    *,
+    bd_bin: str | None = None,
+    inherited: Mapping[str, str] | None = None,
+) -> dict[str, str]:
     source = dict(inherited or os.environ)
     env = {key: source[key] for key in INHERITED_ENV_KEYS if source.get(key)}
     if not env.get("HOME"):
@@ -1020,7 +1048,10 @@ def build_gate_env(gc_bin: str, workspace: GateWorkspace, inherited: Mapping[str
 
     shim_dir = install_service_manager_shims(workspace.gc_home)
     gc_bin_dir = str(Path(gc_bin).resolve().parent)
-    env["PATH"] = os.pathsep.join(part for part in (str(shim_dir), gc_bin_dir, env.get("PATH", "")) if part)
+    bd_bin_dir = str(Path(bd_bin).resolve().parent) if bd_bin else ""
+    env["PATH"] = os.pathsep.join(
+        part for part in (str(shim_dir), gc_bin_dir, bd_bin_dir, env.get("PATH", "")) if part
+    )
     env["GC_ACCEPTANCE_GC_BIN"] = gc_bin
     env["GC_HOME"] = str(workspace.gc_home)
     env["XDG_RUNTIME_DIR"] = str(workspace.runtime_dir)
@@ -1038,6 +1069,53 @@ def build_gate_env(gc_bin: str, workspace: GateWorkspace, inherited: Mapping[str
         env.setdefault("ANTHROPIC_BASE_URL", "https://ollama.com")
         env.setdefault("ANTHROPIC_AUTH_TOKEN", env["OLLAMA_API_KEY"])
     return env
+
+
+def beads_module_version(build_metadata: str) -> str | None:
+    """Return the embedded beads module version from `go version -m` output."""
+    for line in build_metadata.splitlines():
+        fields = line.split()
+        if len(fields) < 3 or fields[0] not in {"dep", "mod"} or fields[1] != BEADS_MODULE:
+            continue
+        return fields[2].strip("()")
+    return None
+
+
+def require_matching_beads_modules(gc_metadata: str, bd_metadata: str) -> None:
+    gc_version = beads_module_version(gc_metadata)
+    bd_version = beads_module_version(bd_metadata)
+    if not gc_version or not bd_version or gc_version == bd_version:
+        return
+    raise GateError(
+        "incompatible gc/bd beads modules: "
+        f"gc embeds {BEADS_MODULE}@{gc_version}, but bd embeds {BEADS_MODULE}@{bd_version}. "
+        "Use --bd-bin (or GC_BD_BIN) with a bd binary built from the same beads module as --gc-bin."
+    )
+
+
+def go_build_metadata(binary: str, *, env: Mapping[str, str]) -> str:
+    """Best-effort Go build-info inspection used to catch gc/bd schema skew."""
+    try:
+        result = subprocess.run(
+            ["go", "version", "-m", binary],
+            env=dict(env),
+            text=True,
+            capture_output=True,
+            timeout=parse_duration("15s"),
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+    if result.returncode != 0:
+        return ""
+    return result.stdout or ""
+
+
+def validate_gc_bd_compatibility(gc_bin: str, bd_bin: str, *, env: Mapping[str, str]) -> None:
+    require_matching_beads_modules(
+        go_build_metadata(gc_bin, env=env),
+        go_build_metadata(bd_bin, env=env),
+    )
 
 
 def pythonpath_with_host_modules(existing: str | None, module_names: Sequence[str]) -> str:
@@ -1258,6 +1336,11 @@ def initialize_rig_git(rig_dir: Path, *, env: Mapping[str, str]) -> None:
     run_checked(["git", "commit", "-m", "Add inference gate fixtures"], cwd=rig_dir, env=env)
 
 
+def should_validate_gastown_orchestration_contract(gates: Sequence[str]) -> bool:
+    """Keep the fast RC smoke to its formula/route compatibility boundary."""
+    return SMOKE_GATE not in gates
+
+
 def initialize_city(
     gc_bin: str,
     workspace: GateWorkspace,
@@ -1301,7 +1384,7 @@ def initialize_city(
             env=env,
             timeout=parse_duration("2m"),
         )
-    if pack_spec.gastown:
+    if pack_spec.gastown and should_validate_gastown_orchestration_contract(gates):
         validate_gastown_orchestration_contract(pack_spec.source)
     else:
         validate_methodology_flow_contract(pack_spec)
@@ -1312,6 +1395,8 @@ def start_city(gc_bin: str, workspace: GateWorkspace, *, env: Mapping[str, str])
 
 
 def selected_setup_formulas(pack_spec: PackSpec, gates: Sequence[str]) -> list[str]:
+    if SMOKE_GATE in gates:
+        return list(pack_spec.setup_formulas)
     selected: list[str] = []
     if pack_spec.gastown:
         return list(pack_spec.setup_formulas)
@@ -1342,6 +1427,69 @@ def build_artifact_root(pack_spec: PackSpec) -> Path:
     if not pack_spec.build_formula:
         raise GateError(f"pack {pack_spec.name} does not define a build formula")
     return Path(".gc/inference-gate") / pack_spec.name / pack_spec.build_formula
+
+
+def smoke_title(pack_spec: PackSpec) -> str:
+    return f"{SMOKE_TITLE_PREFIX}: {pack_spec.name}"
+
+
+def smoke_target(workspace: GateWorkspace, pack_spec: PackSpec) -> str:
+    if not pack_spec.smoke_agent:
+        raise GateError(f"pack {pack_spec.name} does not define a direct model smoke agent")
+    return f"{workspace.rig_name}/{pack_spec.smoke_agent}"
+
+
+def smoke_task(pack_spec: PackSpec) -> str:
+    return f"""{smoke_title(pack_spec)}
+
+This is a release-candidate compatibility smoke. Do not start a formula, modify
+project files, or delegate work. Respond with exactly `PACK_SMOKE_OK:
+{pack_spec.name}` in the bead notes, then close this bead using the normal bead
+tooling. Do not create additional beads.
+"""
+
+
+def launch_smoke_bead(
+    gc_bin: str,
+    workspace: GateWorkspace,
+    *,
+    env: Mapping[str, str],
+    pack_spec: PackSpec,
+) -> str:
+    target = smoke_target(workspace, pack_spec)
+    output = run_checked(
+        [
+            gc_bin,
+            "--city",
+            str(workspace.city_dir),
+            "--rig",
+            workspace.rig_name,
+            "sling",
+            target,
+            "--stdin",
+            "--force",
+            "--no-formula",
+            "--json",
+        ],
+        cwd=workspace.rig_dir,
+        env=env,
+        timeout=parse_duration("2m"),
+        log_output=True,
+        input_text=smoke_task(pack_spec),
+    )
+    bead_id = extract_sling_root_id(output)
+    if bead_id:
+        return bead_id
+    bead = wait_for_root_by_title(
+        gc_bin,
+        workspace,
+        env=env,
+        title=smoke_title(pack_spec),
+        timeout=parse_duration("30s"),
+    )
+    if bead and bead.get("id"):
+        return str(bead["id"])
+    raise GateError(f"could not determine model smoke bead from sling output:\n{output}")
 
 
 def launch_review_formula(gc_bin: str, workspace: GateWorkspace, *, env: Mapping[str, str], pack_spec: PackSpec) -> str:
@@ -1489,6 +1637,7 @@ def list_beads(gc_bin: str, workspace: GateWorkspace, *, env: Mapping[str, str])
                 workspace.rig_name,
                 "bd",
                 "list",
+                "--all",
                 "--json",
                 "--limit",
                 BD_LIST_LIMIT,
@@ -1870,7 +2019,7 @@ def require_expected_review_signal(report_path: Path, *, allow_approved: bool = 
     text = report_path.read_text(encoding="utf-8", errors="replace")
     lower = text.lower()
     has_risk = "shell" in lower and "injection" in lower and "subprocess" in lower
-    has_blocking_status = re.search(r"(?m)^status:\s*(changes_required|blocked)\s*$", text) is not None
+    has_blocking_status = blocking_review_status(text)
     has_approved_status = re.search(r"(?m)^status:\s*approved\s*$", text) is not None
     has_resolution = any(
         marker in lower
@@ -1890,6 +2039,17 @@ def require_expected_review_signal(report_path: Path, *, allow_approved: bool = 
             "review report did not identify and handle the expected shell-injection risk. "
             f"status_ok={has_status} risk_ok={has_risk} resolution_ok={has_resolution} report={report_path}"
         )
+
+
+def blocking_review_status(text: str) -> bool:
+    if re.search(r"(?m)^status:\s*(changes_required|blocked)\s*$", text):
+        return True
+    if "cannot be approved" in text.lower():
+        return True
+    return re.search(
+        r"(?ims)^#{1,6}\s*verdict\b[\s\S]{0,300}\b(iterate|changes_required|changes required|blocked)\b",
+        text,
+    ) is not None
 
 
 def validate_build_basic_result(
@@ -2666,6 +2826,39 @@ def stop_city(gc_bin: str, workspace: GateWorkspace, *, env: Mapping[str, str]) 
             print(f"cleanup command failed ({shlex.join(command)}): {exc}", file=sys.stderr)
 
 
+def require_smoke_ack(bead: Mapping[str, Any], pack_spec: PackSpec) -> None:
+    expected = f"PACK_SMOKE_OK: {pack_spec.name}"
+    if expected not in {line.strip() for line in bead_notes_text(bead).splitlines()}:
+        raise GateError(f"{pack_spec.name} model smoke closed without required acknowledgment {expected!r}")
+
+
+def run_smoke_gate(
+    gc_bin: str,
+    workspace: GateWorkspace,
+    *,
+    env: Mapping[str, str],
+    pack_spec: PackSpec,
+    timeout: float,
+    poll_interval: float,
+) -> None:
+    bead_id = launch_smoke_bead(gc_bin, workspace, env=env, pack_spec=pack_spec)
+    closed = wait_for_bead_closed(
+        gc_bin,
+        workspace,
+        bead_id,
+        env=env,
+        timeout=timeout,
+        poll_interval=poll_interval,
+    )
+    require_smoke_ack(closed, pack_spec)
+    target = smoke_target(workspace, pack_spec)
+    validate_required_routes(
+        [closed],
+        [target],
+        context=f"{pack_spec.name} model smoke",
+    )
+
+
 def run_review_gate(
     gc_bin: str,
     workspace: GateWorkspace,
@@ -2761,6 +2954,8 @@ def expand_pack_selection(selection: str) -> list[str]:
         return list(PACK_SPECS.keys())
     if selection == "methodology":
         return list(METHODOLOGY_PACKS)
+    if selection == "model-smoke":
+        return list(MODEL_SMOKE_PACKS)
     if selection in PACK_SPECS:
         return [selection]
     raise GateError(f"unknown pack selection: {selection}")
@@ -2781,6 +2976,7 @@ def resolve_pack_spec(args: argparse.Namespace, pack_name: str) -> PackSpec:
 
 def run_gate(args: argparse.Namespace, *, pack_name: str | None = None, workdir: Path | None = None) -> None:
     gc_bin = resolve_binary(args.gc_bin)
+    bd_bin = resolve_binary(args.bd_bin)
     selected_pack = pack_name or args.pack
     pack_spec = resolve_pack_spec(args, selected_pack)
 
@@ -2806,12 +3002,14 @@ def run_gate(args: argparse.Namespace, *, pack_name: str | None = None, workdir:
         pack_binding=pack_spec.binding,
         pack_name=pack_spec.name,
         gastown=pack_spec.gastown,
+        include_pack_at_city_scope=not (pack_spec.gastown and SMOKE_GATE in gates),
         city_name=city_name_for_pack(args, pack_spec),
         rig_name=args.rig_name,
     )
-    env = build_gate_env(gc_bin, workspace)
+    env = build_gate_env(gc_bin, workspace, bd_bin=bd_bin)
     should_stop = False
     try:
+        validate_gc_bd_compatibility(gc_bin, bd_bin, env=env)
         if not args.skip_inference_env_check and not args.setup_only:
             expected_model = validate_inference_env(env)
             preflight_inference_model(expected_model, env=env)
@@ -2823,7 +3021,16 @@ def run_gate(args: argparse.Namespace, *, pack_name: str | None = None, workdir:
         start_city(gc_bin, workspace, env=env)
         for gate in gates:
             print(f"running {pack_spec.name} pack inference gate: {gate}", flush=True)
-            if gate == REVIEW_GATE:
+            if gate == SMOKE_GATE:
+                run_smoke_gate(
+                    gc_bin,
+                    workspace,
+                    env=env,
+                    pack_spec=pack_spec,
+                    timeout=timeout,
+                    poll_interval=poll_interval,
+                )
+            elif gate == REVIEW_GATE:
                 run_review_gate(
                     gc_bin,
                     workspace,
@@ -2884,6 +3091,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--gc-bin", default=os.environ.get("GC_BIN", "gc"), help="gc binary to exercise")
     parser.add_argument(
+        "--bd-bin",
+        default=os.environ.get("GC_BD_BIN", "bd"),
+        help="bd binary that must be schema-compatible with --gc-bin",
+    )
+    parser.add_argument(
         "--pack",
         choices=SUPPORTED_PACK_CHOICES,
         default=GASCITY_PACK,
@@ -2906,7 +3118,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--rig-name", default="fixture", help="disposable rig name")
     parser.add_argument(
         "--gate",
-        choices=(ALL_GATE, REVIEW_GATE, BUILD_GATE, BUILD_BASIC_GATE, GASTOWN_ORCHESTRATION_GATE),
+        choices=(ALL_GATE, REVIEW_GATE, BUILD_GATE, BUILD_BASIC_GATE, GASTOWN_ORCHESTRATION_GATE, SMOKE_GATE),
         default=DEFAULT_GATE,
         help="which inference gate to run",
     )

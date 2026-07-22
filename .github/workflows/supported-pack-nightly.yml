@@ -31,6 +31,7 @@ on:
           - build
           - build-basic
           - gastown-orchestration
+          - smoke
         default: all
       pack:
         description: "Supported pack or group to exercise for manual subset checks."
@@ -51,14 +52,14 @@ permissions:
   contents: read
 
 env:
-  DOLT_VERSION: "2.1.0"
-  BD_VERSION: "v1.0.4"
+  DOLT_VERSION: "2.1.7"
+  BD_VERSION: "v1.1.0"
   CLAUDE_VERSION: "2.1.123"
 
 jobs:
   static-contracts:
     name: static pack flow contracts
-    runs-on: blacksmith-32vcpu-ubuntu-2404
+    runs-on: blacksmith-2vcpu-ubuntu-2404
     timeout-minutes: 15
     steps:
       - name: Check out gascity-packs
@@ -85,53 +86,36 @@ jobs:
     timeout-minutes: ${{ matrix.timeout_minutes }}
     strategy:
       fail-fast: false
-      max-parallel: 1
+      # The managed Ollama pool has two credentials. Keep one real full E2E
+      # canary while running the direct pack smokes in bounded pairs.
+      max-parallel: 2
       matrix:
         include:
           - pack: gascity
-            gate: review
-            timeout_minutes: 45
+            # Full E2E canary: artifacts, implementation worktree, and pytest.
+            gate: build
+            timeout_minutes: 30
             gate_timeout: 30m
-          - pack: gascity
-            gate: build-basic
-            timeout_minutes: 110
-            gate_timeout: 90m
           - pack: superpowers
-            gate: review
-            timeout_minutes: 60
-            gate_timeout: 45m
-          - pack: superpowers
-            gate: build
-            timeout_minutes: 120
-            gate_timeout: 100m
+            gate: smoke
+            timeout_minutes: 25
+            gate_timeout: 25m
           - pack: compound-engineering
-            gate: review
-            timeout_minutes: 60
-            gate_timeout: 45m
-          - pack: compound-engineering
-            gate: build
-            timeout_minutes: 120
-            gate_timeout: 100m
+            gate: smoke
+            timeout_minutes: 25
+            gate_timeout: 25m
           - pack: gstack
-            gate: review
-            timeout_minutes: 75
-            gate_timeout: 60m
-          - pack: gstack
-            gate: build
-            timeout_minutes: 150
-            gate_timeout: 130m
+            gate: smoke
+            timeout_minutes: 25
+            gate_timeout: 25m
           - pack: bmad
-            gate: review
-            timeout_minutes: 60
-            gate_timeout: 45m
-          - pack: bmad
-            gate: build
-            timeout_minutes: 120
-            gate_timeout: 100m
+            gate: smoke
+            timeout_minutes: 25
+            gate_timeout: 25m
           - pack: gastown
-            gate: gastown-orchestration
-            timeout_minutes: 120
-            gate_timeout: 110m
+            gate: smoke
+            timeout_minutes: 25
+            gate_timeout: 25m
     env:
       # Claude Code appends /v1/messages itself, so this base URL intentionally
       # does not end in /v1.
@@ -224,7 +208,7 @@ jobs:
         if: steps.subset.outputs.run_gate == 'true'
         uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
         with:
-          go-version: "1.25.10"
+          go-version: "1.26.5"
 
       - name: Set up Node
         if: steps.subset.outputs.run_gate == 'true'

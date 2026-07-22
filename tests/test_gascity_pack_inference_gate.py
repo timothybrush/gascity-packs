@@ -194,6 +194,30 @@ def test_write_gate_workspace_wires_gastown_city_and_rig_imports(tmp_path) -> No
     assert f'source = "{pack_source}"' in pack_toml
 
 
+def test_write_gate_workspace_can_limit_gastown_smoke_to_rig_scope(tmp_path) -> None:
+    pack_source = tmp_path / "repo" / "gastown"
+    roles_source = tmp_path / "repo" / "gascity" / "roles"
+    pack_source.mkdir(parents=True)
+    roles_source.mkdir(parents=True)
+
+    workspace = gascity_pack_inference_gate.write_gate_workspace(
+        tmp_path / "gate",
+        pack_source=pack_source,
+        roles_source=roles_source,
+        pack_binding="gastown",
+        pack_name="gastown",
+        gastown=True,
+        include_pack_at_city_scope=False,
+        city_name="gastown-inference-city",
+        rig_name="fixture",
+    )
+
+    pack_toml = (workspace.city_dir / "pack.toml").read_text(encoding="utf-8")
+    city_toml = (workspace.city_dir / "city.toml").read_text(encoding="utf-8")
+    assert "[imports.gastown]" not in pack_toml
+    assert "[rigs.imports.gastown]" in city_toml
+
+
 def test_build_gate_env_uses_nightly_ollama_auth_shape(tmp_path) -> None:
     workspace = gascity_pack_inference_gate.GateWorkspace(
         root=tmp_path,
@@ -228,6 +252,54 @@ def test_build_gate_env_uses_nightly_ollama_auth_shape(tmp_path) -> None:
     assert env["DOLT_ROOT_PATH"] == str(workspace.gc_home)
     dolt_config = json.loads((workspace.gc_home / ".dolt" / "config_global.json").read_text(encoding="utf-8"))
     assert dolt_config["user.email"] == "gascity-pack-gate@example.invalid"
+
+
+def test_build_gate_env_prefers_explicit_bd_binary(tmp_path) -> None:
+    workspace = gascity_pack_inference_gate.GateWorkspace(
+        root=tmp_path,
+        city_dir=tmp_path / "city",
+        rig_dir=tmp_path / "fixture",
+        gc_home=tmp_path / "gc-home",
+        runtime_dir=tmp_path / "runtime",
+        claude_config_dir=tmp_path / "gc-home" / ".claude",
+        city_name="inference-city",
+        rig_name="fixture",
+    )
+    workspace.gc_home.mkdir(parents=True)
+
+    env = gascity_pack_inference_gate.build_gate_env(
+        "/opt/gc/bin/gc",
+        workspace,
+        bd_bin="/opt/bd/bin/bd",
+        inherited={"PATH": "/usr/bin", "HOME": str(tmp_path / "home")},
+    )
+
+    path_parts = env["PATH"].split(os.pathsep)
+    assert path_parts[1:3] == ["/opt/gc/bin", "/opt/bd/bin"]
+    assert path_parts[-1] == "/usr/bin"
+
+
+def test_beads_module_version_guard_rejects_gc_bd_schema_drift() -> None:
+    gc_metadata = "dep\tgithub.com/steveyegge/beads\tv1.1.0\th1:abc\n"
+    bd_metadata = "mod\tgithub.com/steveyegge/beads\t(devel)\n"
+
+    assert gascity_pack_inference_gate.beads_module_version(gc_metadata) == "v1.1.0"
+    assert gascity_pack_inference_gate.beads_module_version(bd_metadata) == "devel"
+    with pytest.raises(gascity_pack_inference_gate.GateError, match="incompatible gc/bd beads modules"):
+        gascity_pack_inference_gate.require_matching_beads_modules(gc_metadata, bd_metadata)
+
+
+def test_beads_module_version_guard_accepts_matching_modules() -> None:
+    gc_metadata = "dep\tgithub.com/steveyegge/beads\tv1.1.0\th1:abc\n"
+    bd_metadata = "mod\tgithub.com/steveyegge/beads\tv1.1.0\th1:abc\n"
+
+    gascity_pack_inference_gate.require_matching_beads_modules(gc_metadata, bd_metadata)
+
+
+def test_parser_accepts_explicit_bd_binary() -> None:
+    args = gascity_pack_inference_gate.build_parser().parse_args(["--bd-bin", "/tmp/bd"])
+
+    assert args.bd_bin == "/tmp/bd"
 
 
 def inference_env(**overrides: str) -> dict[str, str]:
@@ -332,11 +404,14 @@ def test_supported_pack_nightly_workflow_uses_manifold_shape_and_pack_matrix() -
     assert "run_gate=true" in workflow
     assert "if: steps.subset.outputs.run_gate == 'true'" in workflow
     assert "if: always() && steps.subset.outputs.run_gate == 'true'" in workflow
-    assert "max-parallel: 1" in workflow
+    assert "max-parallel: 2" in workflow
+    assert "runs-on: blacksmith-2vcpu-ubuntu-2404" in workflow
     assert "runs-on: blacksmith-32vcpu-ubuntu-2404" in workflow
     assert "GATE_TIMEOUT: ${{ github.event.inputs.timeout || matrix.gate_timeout }}" in workflow
     assert '--timeout "$GATE_TIMEOUT"' in workflow
-    assert 'DOLT_VERSION: "2.1.0"' in workflow
+    assert 'DOLT_VERSION: "2.1.7"' in workflow
+    assert 'BD_VERSION: "v1.1.0"' in workflow
+    assert 'go-version: "1.26.5"' in workflow
     assert "ANTHROPIC_BASE_URL: https://works.gascity.com/manifold-api" in workflow
     assert "ANTHROPIC_AUTH_TOKEN: ${{ secrets.MANIFOLD_AUTH_TOKEN }}" in workflow
     assert "OLLAMA_API_KEY: ${{ secrets.OLLAMA_API_KEY }}" in workflow
@@ -349,23 +424,24 @@ def test_supported_pack_nightly_workflow_uses_manifold_shape_and_pack_matrix() -
         "GC_WORKER_INFERENCE_CLAUDE_MANIFOLD_SUBAGENT_MODEL",
     ):
         assert model_var in workflow
-    expected_entries = (
-        ("gascity", "review", "30m"),
-        ("gascity", "build-basic", "90m"),
-        ("superpowers", "review", "45m"),
-        ("superpowers", "build", "100m"),
-        ("compound-engineering", "review", "45m"),
-        ("compound-engineering", "build", "100m"),
-        ("gstack", "review", "60m"),
-        ("gstack", "build", "130m"),
-        ("bmad", "review", "45m"),
-        ("bmad", "build", "100m"),
-        ("gastown", "gastown-orchestration", "110m"),
-    )
-    for pack, gate, gate_timeout in expected_entries:
-        assert f"- pack: {pack}" in workflow
-        assert f"gate: {gate}" in workflow
-        assert f"gate_timeout: {gate_timeout}" in workflow
+    def matrix_entry(pack: str) -> str:
+        match = re.search(
+            rf"(?ms)^\s*- pack: {re.escape(pack)}\s*$([\s\S]*?)(?=^\s*- pack:|^    env:)",
+            workflow,
+        )
+        assert match, f"matrix entry for {pack} was not found"
+        return match.group(0)
+
+    gascity = matrix_entry("gascity")
+    assert re.search(r"(?m)^\s*gate: build$", gascity)
+    assert re.search(r"(?m)^\s*timeout_minutes: 30$", gascity)
+    assert re.search(r"(?m)^\s*gate_timeout: 30m$", gascity)
+    for pack in ("superpowers", "compound-engineering", "gstack", "bmad", "gastown"):
+        entry = matrix_entry(pack)
+        assert re.search(r"(?m)^\s*gate: smoke$", entry)
+        assert re.search(r"(?m)^\s*timeout_minutes: 25$", entry)
+        assert re.search(r"(?m)^\s*gate_timeout: 25m$", entry)
+    assert "GATE_TIMEOUT: ${{ github.event.inputs.timeout || matrix.gate_timeout }}" in workflow
     assert '--pack "${{ matrix.pack }}"' in workflow
     assert '--gate "${{ matrix.gate }}"' in workflow
     assert "name: supported-pack-nightly-${{ matrix.pack }}-${{ matrix.gate }}" in workflow
@@ -383,7 +459,9 @@ def test_dispatch_inference_workflow_is_manual_or_external_only() -> None:
     assert "\n  pull_request:" not in workflow
     assert "\n  push:" not in workflow
     assert "runs-on: blacksmith-32vcpu-ubuntu-2404" in workflow
-    assert 'DOLT_VERSION: "2.1.0"' in workflow
+    assert 'DOLT_VERSION: "2.1.7"' in workflow
+    assert 'BD_VERSION: "v1.1.0"' in workflow
+    assert 'go-version: "1.26.5"' in workflow
     assert "include-hidden-files: true" in workflow
     assert "ANTHROPIC_BASE_URL: https://works.gascity.com/manifold-api" in workflow
     assert "ANTHROPIC_AUTH_TOKEN: ${{ secrets.MANIFOLD_AUTH_TOKEN }}" in workflow
@@ -518,7 +596,7 @@ printf '[{{"id":"fi-1","title":"root","status":"open"}}]\\n'
     beads = gascity_pack_inference_gate.list_beads(str(fake_gc), workspace, env={})
 
     assert beads == [{"id": "fi-1", "title": "root", "status": "open"}]
-    assert args_path.read_text(encoding="utf-8").splitlines()[-3:] == ["--json", "--limit", "1000"]
+    assert args_path.read_text(encoding="utf-8").splitlines()[-4:] == ["--all", "--json", "--limit", "1000"]
 
 
 def test_list_beads_falls_back_to_city_event_log_when_live_list_is_empty(tmp_path) -> None:
@@ -779,6 +857,43 @@ def test_expand_pack_selection_supports_supported_pack_groups() -> None:
     )
 
 
+def test_model_smoke_selection_is_five_packs_with_a_25_minute_global_budget() -> None:
+    assert gascity_pack_inference_gate.expand_pack_selection("model-smoke") == [
+        "superpowers",
+        "compound-engineering",
+        "gstack",
+        "bmad",
+        "gastown",
+    ]
+    assert gascity_pack_inference_gate.parse_duration(
+        gascity_pack_inference_gate.MODEL_SMOKE_GLOBAL_TIMEOUT
+    ) == 25 * 60
+
+
+def test_model_smoke_skips_only_the_deep_gastown_orchestration_contract() -> None:
+    assert not gascity_pack_inference_gate.should_validate_gastown_orchestration_contract(
+        [gascity_pack_inference_gate.SMOKE_GATE]
+    )
+    assert gascity_pack_inference_gate.should_validate_gastown_orchestration_contract(
+        [gascity_pack_inference_gate.GASTOWN_ORCHESTRATION_GATE]
+    )
+
+
+def test_require_smoke_ack_accepts_the_pack_specific_sentinel() -> None:
+    gascity_pack_inference_gate.require_smoke_ack(
+        {"notes": "PACK_SMOKE_OK: superpowers\n"},
+        gascity_pack_inference_gate.PACK_SPECS["superpowers"],
+    )
+
+
+def test_require_smoke_ack_rejects_a_closed_bead_without_the_sentinel() -> None:
+    with pytest.raises(gascity_pack_inference_gate.GateError, match="PACK_SMOKE_OK: superpowers"):
+        gascity_pack_inference_gate.require_smoke_ack(
+            {"notes": "Completed without the requested compatibility proof."},
+            gascity_pack_inference_gate.PACK_SPECS["superpowers"],
+        )
+
+
 def test_pack_specs_cover_supported_formula_entrypoints() -> None:
     for pack_name in gascity_pack_inference_gate.METHODOLOGY_PACKS:
         spec = gascity_pack_inference_gate.PACK_SPECS[pack_name]
@@ -842,6 +957,45 @@ def test_validate_required_routes_rejects_missing_expected_agent() -> None:
             ["missing.agent"],
             context="route test",
         )
+
+
+def test_review_signal_accepts_a_discovered_blocking_upstream_artifact(tmp_path) -> None:
+    report = tmp_path / ".gc" / "inference-gate" / "review-report.md"
+    artifacts = report.parent / "artifacts"
+    artifacts.mkdir(parents=True)
+    report.write_text(
+        """---
+schema: gc.build.review.v1
+status: approved
+---
+
+The command injection finding was fixed after review.
+""",
+        encoding="utf-8",
+    )
+    upstream_report = artifacts / "implementation-review-report.md"
+    upstream_report.write_text(
+        """# Implementation Review Report
+
+The code uses subprocess.run with shell=True, creating a shell injection risk.
+
+## Verdict
+
+**`iterate`**
+
+This cannot be approved until the subprocess call uses an argument vector.
+""",
+        encoding="utf-8",
+    )
+
+    candidates = gascity_pack_inference_gate.review_report_candidates(
+        {},
+        tmp_path,
+        gascity_pack_inference_gate.PACK_SPECS["superpowers"],
+    )
+
+    assert upstream_report.resolve() in candidates
+    gascity_pack_inference_gate.require_expected_review_signal(upstream_report)
 
 
 def test_gastown_session_matching_accepts_bound_and_unbound_identities() -> None:
