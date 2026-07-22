@@ -1448,13 +1448,13 @@ def smoke_target(workspace: GateWorkspace, pack_spec: PackSpec) -> str:
 
 
 def smoke_task(pack_spec: PackSpec) -> str:
-    return f"""{smoke_title(pack_spec)}
-
-This is a release-candidate compatibility smoke. Do not start a formula, modify
-project files, or delegate work. Respond with exactly `PACK_SMOKE_OK:
-{pack_spec.name}` in the bead notes, then close this bead using the normal bead
-tooling. Do not create additional beads.
-"""
+    acknowledgment = f"PACK_SMOKE_OK: {pack_spec.name}"
+    return (
+        f"{smoke_title(pack_spec)}\n\n"
+        "This is a release-candidate compatibility smoke. Do not start a formula, modify\n"
+        f"project files, or delegate work. Respond with exactly `{acknowledgment}` in the bead\n"
+        "notes, then close this bead using the normal bead tooling. Do not create additional beads.\n"
+    )
 
 
 def launch_smoke_bead(

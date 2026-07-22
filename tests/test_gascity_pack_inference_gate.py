@@ -880,6 +880,12 @@ def test_model_smoke_skips_only_the_deep_gastown_orchestration_contract() -> Non
     )
 
 
+def test_smoke_task_requests_the_required_acknowledgment_on_one_line() -> None:
+    task = gascity_pack_inference_gate.smoke_task(gascity_pack_inference_gate.PACK_SPECS["superpowers"])
+
+    assert "`PACK_SMOKE_OK: superpowers`" in task
+
+
 def test_require_smoke_ack_accepts_the_pack_specific_sentinel() -> None:
     gascity_pack_inference_gate.require_smoke_ack(
         {"notes": "PACK_SMOKE_OK: superpowers\n"},
